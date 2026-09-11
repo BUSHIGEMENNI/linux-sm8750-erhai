@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Backlight driver for the Kinetic KTZ8866
+ * Backlight driver for the Kinetic KTZ8866/KTZ8868
  *
  * Copyright (C) 2022, 2023 Jianhua Lu <lujianhua000@gmail.com>
  */
@@ -47,7 +47,7 @@ struct ktz8866 {
 	struct i2c_client *client;
 	struct regmap *regmap;
 	bool led_on;
-	struct gpio_desc *enable_gpio;
+	struct gpio_descs *enable_gpios;
 };
 
 static const struct regmap_config ktz8866_regmap_config = {
@@ -147,14 +147,16 @@ static int ktz8866_probe(struct i2c_client *client)
 	if (ret)
 		return dev_err_probe(&client->dev, ret, "get regulator vddneg failed\n");
 
-	ktz->enable_gpio = devm_gpiod_get_optional(&client->dev, "enable", GPIOD_OUT_HIGH);
-	if (IS_ERR(ktz->enable_gpio))
-		return PTR_ERR(ktz->enable_gpio);
+	ktz->enable_gpios = devm_gpiod_get_array_optional(&client->dev, "enable", GPIOD_OUT_HIGH);
+	if (IS_ERR(ktz->enable_gpios))
+		return PTR_ERR(ktz->enable_gpios);
 
 	memset(&props, 0, sizeof(props));
 	props.type = BACKLIGHT_RAW;
 	props.max_brightness = MAX_BRIGHTNESS;
 	props.brightness = DEFAULT_BRIGHTNESS;
+	of_property_read_u32(client->dev.of_node, "default-brightness",
+			     &props.brightness);
 	props.scale = BACKLIGHT_SCALE_LINEAR;
 
 	backlight_dev = devm_backlight_device_register(&client->dev, "ktz8866-backlight",
@@ -180,14 +182,14 @@ static void ktz8866_remove(struct i2c_client *client)
 
 static const struct i2c_device_id ktz8866_ids[] = {
 	{ .name = "ktz8866" },
+	{ .name = "ktz8868" },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ktz8866_ids);
 
 static const struct of_device_id ktz8866_match_table[] = {
-	{
-		.compatible = "kinetic,ktz8866",
-	},
+	{ .compatible = "kinetic,ktz8866" },
+	{ .compatible = "kinetic,ktz8868" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, ktz8866_match_table);
@@ -204,6 +206,6 @@ static struct i2c_driver ktz8866_driver = {
 
 module_i2c_driver(ktz8866_driver);
 
-MODULE_DESCRIPTION("Kinetic KTZ8866 Backlight Driver");
+MODULE_DESCRIPTION("Kinetic KTZ8866/KTZ8868 Backlight Driver");
 MODULE_AUTHOR("Jianhua Lu <lujianhua000@gmail.com>");
 MODULE_LICENSE("GPL");
