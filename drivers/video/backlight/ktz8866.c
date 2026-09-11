@@ -129,6 +129,7 @@ static int ktz8866_probe(struct i2c_client *client)
 	struct backlight_device *backlight_dev;
 	struct backlight_properties props;
 	struct ktz8866 *ktz;
+	const char *name;
 	int ret = 0;
 
 	ktz = devm_kzalloc(&client->dev, sizeof(*ktz), GFP_KERNEL);
@@ -159,7 +160,11 @@ static int ktz8866_probe(struct i2c_client *client)
 			     &props.brightness);
 	props.scale = BACKLIGHT_SCALE_LINEAR;
 
-	backlight_dev = devm_backlight_device_register(&client->dev, "ktz8866-backlight",
+	/* Several chips (e.g. master/slave KTZ8868 pairs) may share a board */
+	name = "ktz8866-backlight";
+	of_property_read_string(client->dev.of_node, "label", &name);
+
+	backlight_dev = devm_backlight_device_register(&client->dev, name,
 					&client->dev, ktz, &ktz8866_backlight_ops, &props);
 	if (IS_ERR(backlight_dev))
 		return dev_err_probe(&client->dev, PTR_ERR(backlight_dev),

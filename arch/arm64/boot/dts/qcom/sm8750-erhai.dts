@@ -575,6 +575,7 @@
 	ktz8868_slave: backlight@11 {
 		compatible = "kinetic,ktz8868";
 		reg = <0x11>;
+		label = "ktz8868-slave";
 	};
 };
 
@@ -588,6 +589,7 @@
 	ktz8868_master: backlight@11 {
 		compatible = "kinetic,ktz8868";
 		reg = <0x11>;
+		label = "ktz8868-master";
 
 		enable-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>,
 			       <&tlmm 111 GPIO_ACTIVE_HIGH>,
