@@ -565,6 +565,10 @@
 	};
 };
 
+&qupv3_2 {
+	status = "okay";
+};
+
 &i2c11 {
 	status = "okay";
 
@@ -572,6 +576,10 @@
 		compatible = "kinetic,ktz8868";
 		reg = <0x11>;
 	};
+};
+
+&i2c_master_hub_0 {
+	status = "okay";
 };
 
 &i2c_hub_0 {
