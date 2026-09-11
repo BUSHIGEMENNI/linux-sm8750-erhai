@@ -6,6 +6,7 @@
 /dts-v1/;
 
 #include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include "sm8750.dtsi"
 #include "pm8550.dtsi"
@@ -612,7 +613,7 @@
 
 	status = "okay";
 
-	panel@0 {
+	panel: panel@0 {
 		compatible = "novatek,nt36536";
 		reg = <0>;
 
@@ -719,9 +720,72 @@
 	status = "okay";
 };
 
+&spi4 {
+	status = "okay";
+
+	pinctrl-0 = <&qupv3_se4_spi>;
+	pinctrl-names = "default";
+
+	touchscreen@0 {
+		compatible = "novatek,nt36536";
+		reg = <0>;
+		spi-max-frequency = <12000000>;
+
+		pinctrl-0 = <&nt36536_int>;
+		pinctrl-names = "default";
+
+		interrupt-parent = <&tlmm>;
+		interrupts = <162 IRQ_TYPE_EDGE_FALLING>;
+
+		panel = <&panel>;
+		novatek,irq-gpio = <&tlmm 162 IRQ_TYPE_EDGE_FALLING>;
+		novatek,swrst-n8-addr = <0x1fb43e>;
+		novatek,display-coords = <2400 3392>;
+		firmware-name = "novatek/nt36536-xn242.bin";
+	};
+};
+
 &tlmm {
 	/* reserved for secure world */
 	gpio-reserved-ranges = <36 4>, <74 1>;
+
+	qupv3_se4_spi: qupv3-se4-spi-state {
+		qupv3-se4-spi-miso {
+			pins = "gpio48";
+			function = "qup1_se4";
+			drive-strength = <6>;
+			bias-disable;
+		};
+
+		qupv3-se4-spi-mosi {
+			pins = "gpio49";
+			function = "qup1_se4";
+			drive-strength = <4>;
+			bias-disable;
+		};
+
+		qupv3-se4-spi-clk {
+			pins = "gpio50";
+			function = "qup1_se4";
+			drive-strength = <6>;
+			bias-disable;
+		};
+
+		qupv3-se4-spi-cs {
+			pins = "gpio51";
+			function = "qup1_se4";
+			drive-strength = <4>;
+			bias-disable;
+		};
+	};
+
+	nt36536_int: nt36536-int-state {
+		pins = "gpio162";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-disable;
+		input-enable;
+	};
 };
 
 &uart7 {
