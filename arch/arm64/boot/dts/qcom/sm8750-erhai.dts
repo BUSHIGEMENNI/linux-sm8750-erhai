@@ -724,6 +724,12 @@
 	status = "okay";
 };
 
+&remoteproc_adsp {
+	firmware-name = "qcom/sm8750/erhai/adsp.mdt";
+
+	status = "okay";
+};
+
 &spi4 {
 	status = "okay";
 
