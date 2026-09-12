@@ -724,6 +724,15 @@
 	status = "okay";
 };
 
+&adspslpi_mem {
+	/*
+	 * The stock ADSP firmware spans 80.5M from the 0x9ee00000 bank base
+	 * (stock adspslpi is 0x5080000); the upstream 58.5M window makes the
+	 * mdt loader reject the image as "segment outside memory range".
+	 */
+	reg = <0x0 0x9ee00000 0x0 0x5080000>;
+};
+
 &remoteproc_adsp {
 	firmware-name = "qcom/sm8750/erhai/adsp.mdt",
 			"qcom/sm8750/erhai/adsp_dtb.mdt";
