@@ -725,7 +725,8 @@
 };
 
 &remoteproc_adsp {
-	firmware-name = "qcom/sm8750/erhai/adsp.mdt";
+	firmware-name = "qcom/sm8750/erhai/adsp.mdt",
+			"qcom/sm8750/erhai/adsp_dtb.mdt";
 
 	status = "okay";
 };
