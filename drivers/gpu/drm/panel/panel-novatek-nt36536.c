@@ -196,7 +196,6 @@ static int novatek_nt36536_prepare(struct drm_panel *panel)
 {
 	struct novatek_nt36536 *ctx = to_novatek_nt36536(panel);
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi[1] };
-	struct drm_dsc_picture_parameter_set pps;
 	int ret;
 
 	ret = regulator_enable(ctx->vddio);
@@ -206,13 +205,17 @@ static int novatek_nt36536_prepare(struct drm_panel *panel)
 	usleep_range(2000, 3000);
 	novatek_nt36536_reset(ctx);
 
+	/*
+	 * The stock sequence configures the panel's DSC decoder solely through
+	 * the vendor 0x91 blob in the on-commands; it never receives a DCS PPS
+	 * or a compression-mode packet. Sending the standard PPS afterwards
+	 * re-programmed the decoder with full-width (3392) semantics while each
+	 * DSI link only carries 1696 px, so the decoder starved -- black screen.
+	 */
 	ret = novatek_nt36536_on(ctx);
 	if (ret < 0)
 		goto err;
 
-	drm_dsc_pps_payload_pack(&pps, &ctx->dsc);
-	mipi_dsi_picture_parameter_set_multi(&dsi_ctx, &pps);
-	mipi_dsi_compression_mode_multi(&dsi_ctx, true);
 	if (dsi_ctx.accum_err) {
 		ret = dsi_ctx.accum_err;
 		goto err;
