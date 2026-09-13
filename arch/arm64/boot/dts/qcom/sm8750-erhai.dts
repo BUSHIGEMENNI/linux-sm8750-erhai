@@ -614,6 +614,8 @@
 		compatible = "kinetic,ktz8868";
 		reg = <0x11>;
 		label = "ktz8868-slave";
+
+		kinetic,enable-lcd-bias;
 	};
 };
 
@@ -633,6 +635,7 @@
 			       <&tlmm 111 GPIO_ACTIVE_HIGH>,
 			       <&tlmm 14 GPIO_ACTIVE_HIGH>;
 
+		kinetic,enable-lcd-bias;
 		default-brightness = <913>;
 	};
 };
