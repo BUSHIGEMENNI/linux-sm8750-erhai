@@ -967,19 +967,6 @@
 	};
 };
 
-/* The 3392x2400@120 bonded-DSI mode needs the MDP core above the 575MHz
- * OPP ceiling (driver-computed 862.5MHz, dispcc PLL0/2). M64-M68 proved that
- * switching the rate mid-panel-init breaks the DSI command DMA; pre-set it
- * at probe time instead. The mdp_opp_table still caps at 575MHz so
- * dev_pm_opp_set_rate keeps failing (-ERANGE, cosmetic) and the rail level
- * stays at the 575MHz vote -- watch for stability before adding the OPP. */
-&mdss_mdp {
-	assigned-clocks = <&dispcc DISP_CC_MDSS_VSYNC_CLK>,
-			  <&dispcc DISP_CC_MDSS_MDP_CLK>;
-	assigned-clock-rates = <19200000>,
-			       <862500000>;
-};
-
 &gpu {
 	status = "okay";
 };
