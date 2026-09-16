@@ -7,12 +7,14 @@
  */
 
 #include <linux/backlight.h>
+#include <linux/debugfs.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/of_graph.h>
 #include <linux/regulator/consumer.h>
+#include <linux/seq_file.h>
 
 #include <drm/display/drm_dsc.h>
 #include <drm/display/drm_dsc_helper.h>
@@ -27,6 +29,7 @@ struct novatek_nt36536 {
 	struct drm_dsc_config dsc;
 	struct gpio_desc *reset_gpio;
 	struct regulator *vddio;
+	struct dentry *dbg_dir;
 };
 
 static inline struct novatek_nt36536 *to_novatek_nt36536(struct drm_panel *panel)
@@ -277,6 +280,77 @@ static const struct drm_panel_funcs novatek_nt36536_panel_funcs = {
 	.get_modes = novatek_nt36536_get_modes,
 };
 
+#if defined(CONFIG_DEBUG_FS)
+/*
+ * TEMP bring-up diagnostic (drop before erhai/main): DCS readback over each
+ * DSI link separately, to tell "panel dead" apart from "link/decoding
+ * broken" while the panel shows nothing. RDDPM tells whether the panel
+ * believes it is powered and displaying, RDNUMER counts link errors, and a
+ * moving GETSCANLINE proves the panel is actually scanning frames.
+ */
+static void nt36536_dbg_dcs(struct seq_file *s, struct mipi_dsi_device *dsi,
+			    u8 cmd, size_t len, const char *name)
+{
+	u8 buf[4] = { 0 };
+	ssize_t ret;
+
+	ret = mipi_dsi_dcs_read(dsi, cmd, buf, len);
+	if (ret < 0) {
+		seq_printf(s, "  %s(0x%02x): read failed %zd\n", name, cmd, ret);
+		return;
+	}
+	seq_printf(s, "  %s(0x%02x): len=%zd val=%*ph\n", name, cmd, ret,
+		   (int)ret, buf);
+}
+
+static int nt36536_dbg_status_show(struct seq_file *s, void *unused)
+{
+	struct novatek_nt36536 *ctx = s->private;
+	int i;
+
+	for (i = 0; i < 2; i++) {
+		u8 scan_a[2] = { 0 }, scan_b[2] = { 0 };
+		ssize_t ra, rb;
+
+		seq_printf(s, "link%d (%s):\n", i, dev_name(&ctx->dsi[i]->dev));
+		nt36536_dbg_dcs(s, ctx->dsi[i], 0xda, 1, "RDID1");
+		nt36536_dbg_dcs(s, ctx->dsi[i], 0x0a, 1, "RDDPM");
+		nt36536_dbg_dcs(s, ctx->dsi[i], 0x05, 1, "RDNUMER");
+		ra = mipi_dsi_dcs_read(ctx->dsi[i], 0x45, scan_a, 2);
+		msleep(50);
+		rb = mipi_dsi_dcs_read(ctx->dsi[i], 0x45, scan_b, 2);
+		if (ra == 2 && rb == 2)
+			seq_printf(s, "  GETSCANLINE: %u -> %u (%s)\n",
+				   (scan_a[1] << 8) | scan_a[0],
+				   (scan_b[1] << 8) | scan_b[0],
+				   scan_a[0] != scan_b[0] || scan_a[1] != scan_b[1] ?
+				   "SCANNING" : "static");
+		else
+			seq_printf(s, "  GETSCANLINE: read failed %zd/%zd\n", ra, rb);
+	}
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(nt36536_dbg_status);
+
+static void nt36536_debugfs_init(struct novatek_nt36536 *ctx)
+{
+	struct device *dev = &ctx->dsi[0]->dev;
+
+	ctx->dbg_dir = debugfs_create_dir("nt36536-panel", NULL);
+	debugfs_create_file("status", 0444, ctx->dbg_dir, ctx,
+			    &nt36536_dbg_status_fops);
+	dev_info(dev, "TEMP debugfs probe at /sys/kernel/debug/nt36536-panel/status\n");
+}
+
+static void nt36536_debugfs_exit(struct novatek_nt36536 *ctx)
+{
+	debugfs_remove_recursive(ctx->dbg_dir);
+}
+#else
+static inline void nt36536_debugfs_init(struct novatek_nt36536 *ctx) { }
+static inline void nt36536_debugfs_exit(struct novatek_nt36536 *ctx) { }
+#endif
+
 static int novatek_nt36536_probe(struct mipi_dsi_device *dsi)
 {
 	struct mipi_dsi_device_info dsi_info = { "dsi-secondary", 0, NULL };
@@ -358,6 +432,8 @@ static int novatek_nt36536_probe(struct mipi_dsi_device *dsi)
 		}
 	}
 
+	nt36536_debugfs_init(ctx);
+
 	return 0;
 }
 
@@ -365,6 +441,7 @@ static void novatek_nt36536_remove(struct mipi_dsi_device *dsi)
 {
 	struct novatek_nt36536 *ctx = mipi_dsi_get_drvdata(dsi);
 
+	nt36536_debugfs_exit(ctx);
 	drm_panel_remove(&ctx->panel);
 }
 
