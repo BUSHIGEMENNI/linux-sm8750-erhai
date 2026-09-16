@@ -722,6 +722,12 @@
 		reg = <0>;
 
 		reset-gpios = <&tlmm 98 GPIO_ACTIVE_LOW>;
+
+		/* The panel drives TE on gpio86 (mdp_vsync); the DPU video engine
+		 * syncs to it by default (DPU_VSYNC_SOURCE_GPIO_0). Without it
+		 * no frame ever completes (vblank timeouts, black screen). */
+		pinctrl-0 = <&mdp_te_vsync>;
+		pinctrl-names = "default";
 		vddio-supply = <&vreg_l12b_1p8>;
 
 		backlight = <&ktz8868_master>;
@@ -914,6 +920,12 @@
 		pins = "gpio16";
 		function = "gpio";
 		drive-strength = <8>;
+		bias-pull-down;
+	};
+	mdp_te_vsync: mdp-te-vsync-state {
+		pins = "gpio86";
+		function = "mdp_vsync";
+		drive-strength = <2>;
 		bias-pull-down;
 	};
 };
