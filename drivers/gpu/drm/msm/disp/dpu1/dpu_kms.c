@@ -1424,6 +1424,20 @@ static int dpu_dev_probe(struct platform_device *pdev)
 
 	dpu_kms->num_clocks = ret;
 
+	/* TEMP(erhai M86 probe): the 3392x2400@120 bonded-DSI mode needs the
+	 * core clock above the 575MHz OPP ceiling; switching it later in the
+	 * crtc-enable path kills the panel's DSI command DMA (M64). Set ONLY
+	 * the rate here at probe (power domain already attached, no OPP/rail/
+	 * bus vote involved) to bisect whether the M64 failure is the rate
+	 * itself or the OPP-path rail/bandwidth vote. Remove after the
+	 * root cause is known. */
+	if (of_device_is_compatible(dev->of_node, "qcom,sm8750-dpu")) {
+		struct clk *core = msm_clk_bulk_get_clock(dpu_kms->clocks,
+							  dpu_kms->num_clocks, "core");
+		int r = core ? clk_set_rate(core, 862500000) : -ENODEV;
+		DPU_ERROR("TEMP erhai probe-time core rate set: %d\n", r);
+	}
+
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0)
 		return dev_err_probe(dev, irq, "failed to get irq\n");
