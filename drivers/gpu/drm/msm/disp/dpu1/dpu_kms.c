@@ -1440,7 +1440,8 @@ static int dpu_dev_probe(struct platform_device *pdev)
 		 * 575MHz by the time the crtc comes up). Leaked on purpose. */
 		if (!r && core)
 			clk_prepare_enable(core);
-		DPU_ERROR("TEMP erhai probe-time core rate set+hold: %d\n", r);
+		DPU_ERROR("TEMP erhai probe-time core rate set+hold: %d, readback %lu\n",
+			  r, core ? clk_get_rate(core) : 0);
 	}
 
 	irq = platform_get_irq(pdev, 0);
