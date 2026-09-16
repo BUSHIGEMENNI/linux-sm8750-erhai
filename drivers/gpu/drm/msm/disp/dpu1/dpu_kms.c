@@ -1435,7 +1435,12 @@ static int dpu_dev_probe(struct platform_device *pdev)
 		struct clk *core = msm_clk_bulk_get_clock(dpu_kms->clocks,
 							  dpu_kms->num_clocks, "core");
 		int r = core ? clk_set_rate(core, 862500000) : -ENODEV;
-		DPU_ERROR("TEMP erhai probe-time core rate set: %d\n", r);
+		/* Hold one enable reference so clk_disable_unused cannot park
+		 * the RCG (M86 showed the probe-time rate alone reverts to
+		 * 575MHz by the time the crtc comes up). Leaked on purpose. */
+		if (!r && core)
+			clk_prepare_enable(core);
+		DPU_ERROR("TEMP erhai probe-time core rate set+hold: %d\n", r);
 	}
 
 	irq = platform_get_irq(pdev, 0);
