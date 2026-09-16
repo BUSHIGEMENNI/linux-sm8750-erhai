@@ -868,7 +868,10 @@
 };
 
 &gpu_zap_shader {
-	firmware-name = "qcom/sm8750/gen80000_zap.mbn";
+	/* The linux-firmware zap is signed for QC reference devices and this
+	 * retail unit's TrustZone rejects it (-EINVAL on pas_init_image). Test
+	 * whether the GPU is already out of secure mode without a zap. */
+	status = "disabled";
 };
 
 &ufs_mem_phy {
