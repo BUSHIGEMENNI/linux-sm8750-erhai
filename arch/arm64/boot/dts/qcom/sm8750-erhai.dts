@@ -863,6 +863,14 @@
 	status = "okay";
 };
 
+&gpu {
+	status = "okay";
+};
+
+&gpu_zap_shader {
+	firmware-name = "qcom/sm8750/gen80000_zap.mbn";
+};
+
 &ufs_mem_phy {
 	vdda-phy-supply = <&vreg_l1j_0p91>;
 	vdda-pll-supply = <&vreg_l3g_1p2>;
