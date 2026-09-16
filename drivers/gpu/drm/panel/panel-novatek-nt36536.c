@@ -423,6 +423,8 @@ static int novatek_nt36536_probe(struct mipi_dsi_device *dsi)
 					  MIPI_DSI_CLOCK_NON_CONTINUOUS |
 					  MIPI_DSI_MODE_LPM;
 		ctx->dsi[i]->dsc = &ctx->dsc;
+		/* vendor packs two 848-px slices into each video packet */
+		ctx->dsi[i]->dsc_slice_per_pkt = 2;
 
 		ret = devm_mipi_dsi_attach(dev, ctx->dsi[i]);
 		if (ret < 0) {
