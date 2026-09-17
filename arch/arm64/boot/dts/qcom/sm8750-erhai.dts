@@ -114,6 +114,27 @@
 		};
 	};
 
+	/* Pogo keyboard dock: powered via gpio85, UART level path via gpio83.
+	 * regulator-fixed is reliable where a bare gpio-hog on tlmm did not
+	 * drive the pins. Always-on so an attached keyboard is live. */
+	pogo_kb_pwr: regulator-pogo-kb-pwr {
+		compatible = "regulator-fixed";
+		regulator-name = "pogo_kb_pwr";
+		gpio = <&tlmm 85 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	pogo_kb_txen: regulator-pogo-kb-txen {
+		compatible = "regulator-fixed";
+		regulator-name = "pogo_kb_txen";
+		gpio = <&tlmm 83 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
 	vph_pwr: vph-pwr-regulator {
 		compatible = "regulator-fixed";
 
@@ -927,13 +948,6 @@
 		function = "mdp_vsync";
 		drive-strength = <2>;
 		bias-pull-down;
-	};
-	/* Pogo keyboard: power the dock (gpio85) and enable the UART level
-	 * path (gpio83). uart-wake (gpio96) is the keyboard's wake IRQ. */
-	pogo_kb_power_hog: pogo-kb-power-hog {
-		gpio-hog;
-		gpios = <85 GPIO_ACTIVE_HIGH>, <83 GPIO_ACTIVE_HIGH>;
-		output-high;
 	};
 };
 
