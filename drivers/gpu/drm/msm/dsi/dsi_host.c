@@ -1082,6 +1082,10 @@ static void dsi_timing_setup(struct msm_dsi_host *msm_host, bool is_bonded_dsi)
 	}
 
 	if (msm_host->mode_flags & MIPI_DSI_MODE_VIDEO) {
+		/* TEMP(erhai): DSC never enabled on the link (reg reads 0);
+		 * find out whether dsc is attached when the timing setup runs. */
+		DRM_INFO("TEMP dsi_timing_setup %s: dsc=%p video\n",
+			 dev_name(&msm_host->pdev->dev), msm_host->dsc);
 		if (msm_host->dsc)
 			dsi_update_dsc_timing(msm_host, false);
 
