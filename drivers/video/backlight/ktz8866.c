@@ -122,6 +122,24 @@ static void ktz8866_init(struct ktz8866 *ktz)
 
 	if (of_property_read_bool(ktz->client->dev.of_node, "kinetic,enable-lcd-bias"))
 		ktz8866_write(ktz, LCD_BIAS_CFG1, LCD_BIAS_EN);
+
+	/* erhai (OnePlus Pad 2 Pro) ktz8868 backlight+LCD bias: the stock driver
+	 * (msm_drm.ko, disassembled) programs registers that differ from the
+	 * POR defaults this driver otherwise leaves. Without them the panel's
+	 * LCD never renders and the backlight LED stays dark. Apply the exact
+	 * vendor sequence: boost 0x28, OUTP 0x1e, OUTN 0x1e, bias-cfg 0x99,
+	 * then the backlight section 0xb3/0xeb/0x76/0xf8 and sinks 0x77. */
+	if (of_property_read_bool(ktz->client->dev.of_node, "kinetic,erhai-vendor-config")) {
+		ktz8866_write(ktz, 0x0c, 0x28); /* LCD_BOOST_CFG */
+		ktz8866_write(ktz, 0x0d, 0x1e); /* OUTP_CFG */
+		ktz8866_write(ktz, 0x0e, 0x1e); /* OUTN_CFG */
+		ktz8866_write(ktz, 0x09, 0x99); /* LCD_BIAS_CFG1 */
+		ktz8866_write(ktz, 0x02, 0xb3); /* BL_CFG1 */
+		ktz8866_write(ktz, 0x03, 0xeb); /* BL_CFG2 */
+		ktz8866_write(ktz, 0x11, 0x76); /* BL_OPTION2 */
+		ktz8866_write(ktz, 0x15, 0xf8); /* PWM_RAMP_TIME */
+		ktz8866_write(ktz, 0x08, 0x77); /* BL_EN */
+	}
 }
 
 static int ktz8866_probe(struct i2c_client *client)

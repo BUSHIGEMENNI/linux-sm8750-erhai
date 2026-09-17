@@ -701,6 +701,7 @@
 		label = "ktz8868-slave";
 
 		kinetic,enable-lcd-bias;
+		kinetic,erhai-vendor-config;
 	};
 };
 
@@ -721,6 +722,7 @@
 			       <&tlmm 14 GPIO_ACTIVE_HIGH>;
 
 		kinetic,enable-lcd-bias;
+		kinetic,erhai-vendor-config;
 		default-brightness = <913>;
 	};
 };
