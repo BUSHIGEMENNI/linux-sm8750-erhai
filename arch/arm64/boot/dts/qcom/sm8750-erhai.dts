@@ -928,6 +928,14 @@
 		drive-strength = <2>;
 		bias-pull-down;
 	};
+	/* Pogo keyboard: power the dock (gpio85) and enable the UART level
+	 * path (gpio83). uart-wake (gpio96) is the keyboard's wake IRQ. */
+	pogo_kb_power_hog: pogo-kb-power-hog {
+		gpio-hog;
+		gpios = <85 GPIO_ACTIVE_HIGH>, <83 GPIO_ACTIVE_HIGH>;
+		output-high;
+		input;
+	};
 };
 
 &uart7 {
@@ -988,6 +996,10 @@
 	 * retail unit's TrustZone rejects it (-EINVAL on pas_init_image). Test
 	 * whether the GPU is already out of secure mode without a zap. */
 	status = "disabled";
+};
+
+&uart_kb {
+	status = "okay";
 };
 
 &uart14 {
