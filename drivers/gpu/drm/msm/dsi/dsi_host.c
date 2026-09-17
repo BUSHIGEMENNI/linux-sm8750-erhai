@@ -2441,6 +2441,15 @@ int msm_dsi_host_enable(struct mipi_dsi_host *host)
 	dsi_op_mode_config(msm_host,
 		!!(msm_host->mode_flags & MIPI_DSI_MODE_VIDEO), true);
 
+	/* TEMP(erhai): the link never transmits; dump the enable state at the
+	 * exact moment it is (re)armed, no external timing race. */
+	{
+		u32 c = dsi_read(msm_host, REG_DSI_CTRL);
+		u32 st = dsi_read(msm_host, REG_DSI_STATUS0);
+		DRM_INFO("TEMP dsi host %s ENABLE: ctrl=0x%08x status0=0x%08x\n",
+			 dev_name(&msm_host->pdev->dev), c, st);
+	}
+
 	/* TODO: clock should be turned off for command mode,
 	 * and only turned on before MDP START.
 	 * This part of code should be enabled once mdp driver support it.
