@@ -934,7 +934,6 @@
 		gpio-hog;
 		gpios = <85 GPIO_ACTIVE_HIGH>, <83 GPIO_ACTIVE_HIGH>;
 		output-high;
-		input;
 	};
 };
 
