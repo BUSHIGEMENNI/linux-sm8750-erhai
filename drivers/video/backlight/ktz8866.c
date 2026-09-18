@@ -139,6 +139,19 @@ static void ktz8866_init(struct ktz8866 *ktz)
 		ktz8866_write(ktz, 0x11, 0x76); /* BL_OPTION2 */
 		ktz8866_write(ktz, 0x15, 0xf8); /* PWM_RAMP_TIME */
 		ktz8866_write(ktz, 0x08, 0x77); /* BL_EN */
+
+		/* TEMP(erhai): verify the writes landed + read fault/id. */
+		{
+			unsigned int id = 0, en = 0, bias = 0, flag = 0, brt = 0;
+			regmap_read(ktz->regmap, DEVICE_ID, &id);
+			regmap_read(ktz->regmap, BL_EN, &en);
+			regmap_read(ktz->regmap, LCD_BIAS_CFG1, &bias);
+			regmap_read(ktz->regmap, FLAG, &flag);
+			regmap_read(ktz->regmap, BL_BRT_MSB, &brt);
+			dev_info(&ktz->client->dev,
+				 "TEMP ktz8868 %s: id=0x%02x bl_en=0x%02x bias=0x%02x flag=0x%02x brt_msb=0x%02x\n",
+				 ktz->client->name, id, en, bias, flag, brt);
+		}
 	}
 }
 
