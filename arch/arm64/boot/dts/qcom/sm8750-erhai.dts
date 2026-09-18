@@ -347,8 +347,13 @@
 
 		vreg_l12b_1p8: ldo12 {
 			regulator-name = "vreg_l12b_1p8";
-			regulator-min-microvolt = <1200000>;
-			regulator-max-microvolt = <1900000>;
+			/* The XN242 panel's DSI receiver needs vddio at 1.8V (vendor
+			 * panel_voltage_vddi = 1.8V).  The mainline panel driver only
+			 * enables the rail without setting a voltage, so it would sit at
+			 * the 1.2V floor and the panel's DSI interface never responds
+			 * (touch SPI tolerates 1.2V, which is why touch works).  Pin it. */
+			regulator-min-microvolt = <1800000>;
+			regulator-max-microvolt = <1800000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 			regulator-allow-set-load;
 			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
