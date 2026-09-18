@@ -3182,6 +3182,15 @@
 						opp-hz = /bits/ 64 <575000000>;
 						required-opps = <&rpmhpd_opp_nom_l1>;
 					};
+
+					/* The XN242 3392x2400@120 DSC dual-DSI panel (erhai) drives the
+					 * MDP core at 862.5MHz; the dispcc PLL0/2 path provides it.
+					 * Without this OPP the DPU is capped at 575MHz and cannot
+					 * produce the video stream (DSI FIFOs stay empty). */
+					opp-862500000 {
+						opp-hz = /bits/ 64 <862500000>;
+						required-opps = <&rpmhpd_opp_turbo_l1>;
+					};
 				};
 			};
 
