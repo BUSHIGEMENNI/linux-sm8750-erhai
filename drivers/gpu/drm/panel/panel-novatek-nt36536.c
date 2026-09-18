@@ -419,8 +419,11 @@ static int novatek_nt36536_probe(struct mipi_dsi_device *dsi)
 	for (i = 0; i < 2; i++) {
 		ctx->dsi[i]->lanes = 4;
 		ctx->dsi[i]->format = MIPI_DSI_FMT_RGB888;
+		/* Vendor stock keeps the DSI clock lane in continuous HS (no
+		 * NON_CONTINUOUS property in the panel dtsi); this DSC video
+		 * panel loses receiver lock if the clock lane drops to LP
+		 * during blanking, so match the vendor and run continuous. */
 		ctx->dsi[i]->mode_flags = MIPI_DSI_MODE_VIDEO |
-					  MIPI_DSI_CLOCK_NON_CONTINUOUS |
 					  MIPI_DSI_MODE_LPM;
 		ctx->dsi[i]->dsc = &ctx->dsc;
 		/* vendor packs two 848-px slices into each video packet */
