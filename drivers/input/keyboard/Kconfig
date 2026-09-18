@@ -13,6 +13,18 @@ menuconfig INPUT_KEYBOARD
 
 if INPUT_KEYBOARD
 
+config KEYBOARD_ONEPLUS_POGO
+	tristate "OnePlus pogo-pin magnetic keyboard/touchpad"
+	depends on SERIO
+	help
+	  Say Y to enable the magnetic pogo-pin keyboard and touchpad on
+	  the OnePlus Pad 2 Pro.  The keyboard MCU sits on a UART (serdev)
+	  and speaks a small framed protocol; key reports are standard USB
+	  HID boot-protocol reports.
+
+	  To compile this driver as a module, choose M here: the module will
+	  be called oneplus-pogo-keyboard.
+
 config KEYBOARD_ADC
 	tristate "ADC Ladder Buttons"
 	depends on IIO
