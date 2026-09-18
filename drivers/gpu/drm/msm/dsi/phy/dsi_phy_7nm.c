@@ -1178,6 +1178,16 @@ static int dsi_7nm_phy_enable(struct msm_dsi_phy *phy,
 	/* DSI lane settings */
 	dsi_phy_hw_v4_0_lane_settings(phy);
 
+	/* TEMP(erhai): the panel never acks any DSI command.  Confirm the PHY is
+	 * actually up: read the REFGEN-ready status + lane config back. */
+	{
+		u32 st = readl(base + REG_DSI_7nm_PHY_CMN_PHY_STATUS);
+		u32 lc0 = readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL0);
+		u32 lc1 = readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL1);
+		DRM_INFO("TEMP dsi phy %d ENABLED: phy_status=0x%08x lane_ctrl0=0x%08x lane_ctrl1=0x%08x\n",
+			 phy->id, st, lc0, lc1);
+	}
+
 	DBG("DSI%d PHY enabled", phy->id);
 
 	return 0;
