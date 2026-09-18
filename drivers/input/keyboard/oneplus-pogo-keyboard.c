@@ -219,6 +219,7 @@ static int pk_probe(struct serdev_device *serdev)
 	pk->tp_y_max = 900;
 	serdev_device_set_drvdata(serdev, pk);
 
+	serdev_device_set_client_ops(serdev, &pk_serdev_ops);
 	ret = serdev_device_open(serdev);
 	if (ret)
 		return dev_err_probe(&serdev->dev, ret, "serdev open failed\n");
@@ -288,7 +289,6 @@ static struct serdev_device_driver pk_driver = {
 		.name = "oneplus-pogo-keyboard",
 		.of_match_table = pk_of_match,
 	},
-	.ops = &pk_serdev_ops,
 };
 module_serdev_device_driver(pk_driver);
 
