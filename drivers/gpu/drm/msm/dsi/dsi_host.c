@@ -1884,8 +1884,18 @@ static int dsi_host_parse_lane_data(struct msm_dsi_host *msm_host,
 	return -EINVAL;
 }
 
+/* VESA DSC 1.2a recommended first_line_bpg_offset for the slice height */
+static u8 dsi_dsc_1_2_first_line_bpg_offset(const struct drm_dsc_config *dsc)
+{
+	if (dsc->slice_height < 8)
+		return 2 * (dsc->slice_height - 1);
+
+	return 12 + DIV_ROUND_UP(9 * min(34, dsc->slice_height - 8), 100);
+}
+
 static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc_config *dsc)
 {
+	enum drm_dsc_params_type rc_type;
 	int ret;
 
 	if (dsc->bits_per_pixel & 0xf) {
@@ -1917,12 +1927,26 @@ static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc
 	drm_dsc_set_const_params(dsc);
 	drm_dsc_set_rc_buf_thresh(dsc);
 
-	/* DPU supports only pre-SCR panels */
-	ret = drm_dsc_setup_rc_params(dsc, DRM_DSC_1_1_PRE_SCR);
+	/*
+	 * The RC range table and the first-line budget are part of the PPS the
+	 * panel decodes with, so follow the DSC generation the panel declares:
+	 * a DSC 1.2 panel that takes its PPS from a vendor blob (no DCS PPS)
+	 * only decodes an encoder that uses the 1.2 ranges and the 1.2
+	 * slice-height dependent first_line_bpg_offset.
+	 */
+	if (dsc->dsc_version_major == 1 && dsc->dsc_version_minor >= 2)
+		rc_type = DRM_DSC_1_2_444;
+	else
+		rc_type = DRM_DSC_1_1_PRE_SCR;
+
+	ret = drm_dsc_setup_rc_params(dsc, rc_type);
 	if (ret) {
 		DRM_DEV_ERROR(&msm_host->pdev->dev, "could not find DSC RC parameters\n");
 		return ret;
 	}
+
+	if (rc_type == DRM_DSC_1_2_444)
+		dsc->first_line_bpg_offset = dsi_dsc_1_2_first_line_bpg_offset(dsc);
 
 	dsc->initial_scale_value = drm_dsc_initial_scale_value(dsc);
 	dsc->line_buf_depth = dsc->bits_per_component + 1;
