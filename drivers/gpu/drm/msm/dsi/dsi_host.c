@@ -1884,6 +1884,12 @@ static int dsi_host_parse_lane_data(struct msm_dsi_host *msm_host,
 	return -EINVAL;
 }
 
+/* TEMP(erhai bring-up A/B): runtime overrides, /sys/module/msm/parameters/ */
+static unsigned int erhai_dsc_first_line;
+module_param_named(dsc_first_line, erhai_dsc_first_line, uint, 0644);
+static bool erhai_dsc_pre_scr;
+module_param_named(dsc_pre_scr, erhai_dsc_pre_scr, bool, 0644);
+
 /* VESA DSC 1.2a recommended first_line_bpg_offset for the slice height */
 static u8 dsi_dsc_1_2_first_line_bpg_offset(const struct drm_dsc_config *dsc)
 {
@@ -1934,7 +1940,8 @@ static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc
 	 * only decodes an encoder that uses the 1.2 ranges and the 1.2
 	 * slice-height dependent first_line_bpg_offset.
 	 */
-	if (dsc->dsc_version_major == 1 && dsc->dsc_version_minor >= 2)
+	if (dsc->dsc_version_major == 1 && dsc->dsc_version_minor >= 2 &&
+	    !erhai_dsc_pre_scr)
 		rc_type = DRM_DSC_1_2_444;
 	else
 		rc_type = DRM_DSC_1_1_PRE_SCR;
@@ -1947,6 +1954,9 @@ static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc
 
 	if (rc_type == DRM_DSC_1_2_444)
 		dsc->first_line_bpg_offset = dsi_dsc_1_2_first_line_bpg_offset(dsc);
+	if (erhai_dsc_first_line)
+		dsc->first_line_bpg_offset = erhai_dsc_first_line;
+	DRM_INFO("TEMP dsc: rc_type=%d first_line=%u\n", rc_type, dsc->first_line_bpg_offset);
 
 	dsc->initial_scale_value = drm_dsc_initial_scale_value(dsc);
 	dsc->line_buf_depth = dsc->bits_per_component + 1;

@@ -2067,6 +2067,10 @@ static void dpu_encoder_dsc_pipe_cfg(struct dpu_hw_ctl *ctl,
 		ctl->ops.update_pending_flush_dsc(ctl, hw_dsc->idx);
 }
 
+/* TEMP(erhai bring-up A/B): /sys/module/msm/parameters/dsc_initial_lines */
+static unsigned int erhai_dsc_initial_lines;
+module_param_named(dsc_initial_lines, erhai_dsc_initial_lines, uint, 0644);
+
 static void dpu_encoder_prep_dsc(struct dpu_encoder_virt *dpu_enc,
 				 struct drm_dsc_config *dsc)
 {
@@ -2113,6 +2117,10 @@ static void dpu_encoder_prep_dsc(struct dpu_encoder_virt *dpu_enc,
 								      dsc_common_mode);
 	else
 		initial_lines = dpu_encoder_dsc_initial_line_calc(dsc, enc_ip_w);
+	if (erhai_dsc_initial_lines)
+		initial_lines = erhai_dsc_initial_lines;
+	DPU_ERROR("TEMP dsc: initial_lines=%u nfl=%u sii=%u dec_delay=%u\n", initial_lines,
+		  dsc->nfl_bpg_offset, dsc->scale_increment_interval, dsc->initial_dec_delay);
 
 	for (i = 0; i < num_dsc; i++)
 		dpu_encoder_dsc_pipe_cfg(ctl, hw_dsc[i], hw_pp[i],
