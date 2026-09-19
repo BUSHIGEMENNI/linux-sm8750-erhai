@@ -347,13 +347,10 @@
 
 		vreg_l12b_1p8: ldo12 {
 			regulator-name = "vreg_l12b_1p8";
-			/* The XN242 panel's DSI receiver needs vddio at 1.8V (vendor
-			 * panel_voltage_vddi = 1.8V).  The mainline panel driver only
-			 * enables the rail without setting a voltage, so it would sit at
-			 * the 1.2V floor and the panel's DSI interface never responds
-			 * (touch SPI tolerates 1.2V, which is why touch works).  Pin it. */
-			regulator-min-microvolt = <1800000>;
-			regulator-max-microvolt = <1800000>;
+			/* Panel/touch vddio; the stock display supply entry for this
+			 * board asks for exactly 1.9V on this rail. */
+			regulator-min-microvolt = <1900000>;
+			regulator-max-microvolt = <1900000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 			regulator-allow-set-load;
 			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
@@ -700,13 +697,13 @@
 &i2c11 {
 	status = "okay";
 
+	/* Second LED string; the stock DT gives it no enable pins and the
+	 * stock driver never programs its bias section. */
 	ktz8868_slave: backlight@11 {
 		compatible = "kinetic,ktz8868";
 		reg = <0x11>;
 		label = "ktz8868-slave";
-
-		kinetic,enable-lcd-bias;
-		kinetic,erhai-vendor-config;
+		default-brightness = <913>;
 	};
 };
 
@@ -722,12 +719,12 @@
 		reg = <0x11>;
 		label = "ktz8868-master";
 
+		/* HWEN, ENP, ENN */
 		enable-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>,
 			       <&tlmm 111 GPIO_ACTIVE_HIGH>,
 			       <&tlmm 14 GPIO_ACTIVE_HIGH>;
 
 		kinetic,enable-lcd-bias;
-		kinetic,erhai-vendor-config;
 		default-brightness = <913>;
 	};
 };
