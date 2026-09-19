@@ -6,11 +6,13 @@
  */
 
 #include <linux/backlight.h>
+#include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/property.h>
 #include <linux/regmap.h>
 
 #define DEFAULT_BRIGHTNESS 1500
@@ -19,6 +21,7 @@
 
 /* reg */
 #define DEVICE_ID 0x01
+#define KTZ8868_BL_CTRL 0x01	/* KTZ8868: global backlight on/off */
 #define BL_CFG1 0x02
 #define BL_CFG2 0x03
 #define BL_BRT_LSB 0x04
@@ -43,11 +46,34 @@
 #define LCD_BIAS_EN 0x9F
 #define PWM_HYST 0x5
 
+/*
+ * KTZ8868: the LED driver is not live until KTZ8868_BL_CTRL is written after
+ * the sink enable + brightness (the sink bits alone leave the string dark),
+ * and the LCD bias outputs are enabled through the ENP/ENN pins rather than
+ * LCD_BIAS_CFG1 bits. Values below follow the KTZ8868 reference sequence
+ * (OVP 34V, linear dimming, 4.7uH/2.5A boost, 30mA/channel, sinks 1-3/5-6).
+ */
+#define KTZ8868_BL_CFG1_VAL 0xB3
+#define KTZ8868_BL_CFG2_VAL 0xEB
+#define KTZ8868_BL_OPTION2_VAL 0x76
+#define KTZ8868_PWM_RAMP_TIME_VAL 0xF8
+#define KTZ8868_BL_EN_VAL 0x77
+#define KTZ8868_LCD_BOOST_CFG_VAL 0x28
+#define KTZ8868_OUTP_CFG_VAL 0x1E	/* +6.0V */
+#define KTZ8868_OUTN_CFG_VAL 0x1E	/* -6.0V */
+#define KTZ8868_LCD_BIAS_CFG1_VAL 0x99	/* bias enable from ENP/ENN pins */
+
+enum ktz8866_variant {
+	KTZ8866,
+	KTZ8868,
+};
+
 struct ktz8866 {
 	struct i2c_client *client;
 	struct regmap *regmap;
 	bool led_on;
 	struct gpio_descs *enable_gpios;
+	enum ktz8866_variant variant;
 };
 
 static const struct regmap_config ktz8866_regmap_config = {
@@ -68,10 +94,54 @@ static int ktz8866_update_bits(struct ktz8866 *ktz, unsigned int reg,
 	return regmap_update_bits(ktz->regmap, reg, mask, val);
 }
 
+static void ktz8866_set_brightness(struct ktz8866 *ktz, unsigned int brightness)
+{
+	ktz8866_write(ktz, BL_BRT_LSB, brightness & 0x7);
+	ktz8866_write(ktz, BL_BRT_MSB, (brightness >> 3) & 0xFF);
+}
+
+static int ktz8868_backlight_update_status(struct ktz8866 *ktz,
+					   unsigned int brightness)
+{
+	if (brightness == 0) {
+		if (ktz->led_on) {
+			ktz8866_write(ktz, KTZ8868_BL_CTRL, 0);
+			msleep(9);
+		}
+		ktz8866_set_brightness(ktz, 0);
+		if (ktz->led_on) {
+			ktz8866_write(ktz, BL_EN, 0);
+			ktz->led_on = false;
+		}
+		return 0;
+	}
+
+	if (!ktz->led_on) {
+		ktz8866_write(ktz, BL_CFG1, KTZ8868_BL_CFG1_VAL);
+		ktz8866_write(ktz, BL_CFG2, KTZ8868_BL_CFG2_VAL);
+		ktz8866_write(ktz, BL_OPTION2, KTZ8868_BL_OPTION2_VAL);
+		ktz8866_write(ktz, PWM_RAMP_TIME, KTZ8868_PWM_RAMP_TIME_VAL);
+		ktz8866_write(ktz, BL_EN, KTZ8868_BL_EN_VAL);
+	}
+
+	ktz8866_set_brightness(ktz, brightness);
+
+	if (!ktz->led_on) {
+		msleep(15);
+		ktz8866_write(ktz, KTZ8868_BL_CTRL, 1);
+		ktz->led_on = true;
+	}
+
+	return 0;
+}
+
 static int ktz8866_backlight_update_status(struct backlight_device *backlight_dev)
 {
 	struct ktz8866 *ktz = bl_get_data(backlight_dev);
 	unsigned int brightness = backlight_get_brightness(backlight_dev);
+
+	if (ktz->variant == KTZ8868)
+		return ktz8868_backlight_update_status(ktz, brightness);
 
 	if (!ktz->led_on && brightness > 0) {
 		ktz8866_update_bits(ktz, BL_EN, BL_EN_BIT, BL_EN_BIT);
@@ -81,9 +151,7 @@ static int ktz8866_backlight_update_status(struct backlight_device *backlight_de
 		ktz->led_on = false;
 	}
 
-	/* Set brightness */
-	ktz8866_write(ktz, BL_BRT_LSB, brightness & 0x7);
-	ktz8866_write(ktz, BL_BRT_MSB, (brightness >> 3) & 0xFF);
+	ktz8866_set_brightness(ktz, brightness);
 
 	return 0;
 }
@@ -122,37 +190,50 @@ static void ktz8866_init(struct ktz8866 *ktz)
 
 	if (of_property_read_bool(ktz->client->dev.of_node, "kinetic,enable-lcd-bias"))
 		ktz8866_write(ktz, LCD_BIAS_CFG1, LCD_BIAS_EN);
+}
 
-	/* erhai (OnePlus Pad 2 Pro) ktz8868 backlight+LCD bias: the stock driver
-	 * (msm_drm.ko, disassembled) programs registers that differ from the
-	 * POR defaults this driver otherwise leaves. Without them the panel's
-	 * LCD never renders and the backlight LED stays dark. Apply the exact
-	 * vendor sequence: boost 0x28, OUTP 0x1e, OUTN 0x1e, bias-cfg 0x99,
-	 * then the backlight section 0xb3/0xeb/0x76/0xf8 and sinks 0x77. */
-	if (of_property_read_bool(ktz->client->dev.of_node, "kinetic,erhai-vendor-config")) {
-		ktz8866_write(ktz, 0x0c, 0x28); /* LCD_BOOST_CFG */
-		ktz8866_write(ktz, 0x0d, 0x1e); /* OUTP_CFG */
-		ktz8866_write(ktz, 0x0e, 0x1e); /* OUTN_CFG */
-		ktz8866_write(ktz, 0x09, 0x99); /* LCD_BIAS_CFG1 */
-		ktz8866_write(ktz, 0x02, 0xb3); /* BL_CFG1 */
-		ktz8866_write(ktz, 0x03, 0xeb); /* BL_CFG2 */
-		ktz8866_write(ktz, 0x11, 0x76); /* BL_OPTION2 */
-		ktz8866_write(ktz, 0x15, 0xf8); /* PWM_RAMP_TIME */
-		ktz8866_write(ktz, 0x08, 0x77); /* BL_EN */
+/*
+ * KTZ8868 power-up: HWEN, then the bias configuration over I2C, then the
+ * ENP/ENN pins in that order with the settling delays the part needs. The
+ * enable-gpios array is HWEN, ENP, ENN; a design that wires only HWEN gets
+ * the same sequence minus the pin-driven bias enable.
+ */
+static int ktz8868_power_up(struct ktz8866 *ktz)
+{
+	struct gpio_descs *gpios = ktz->enable_gpios;
+	bool lcd_bias = device_property_read_bool(&ktz->client->dev,
+						  "kinetic,enable-lcd-bias");
+	int ret;
 
-		/* TEMP(erhai): verify the writes landed + read fault/id. */
-		{
-			unsigned int id = 0, en = 0, bias = 0, flag = 0, brt = 0;
-			regmap_read(ktz->regmap, DEVICE_ID, &id);
-			regmap_read(ktz->regmap, BL_EN, &en);
-			regmap_read(ktz->regmap, LCD_BIAS_CFG1, &bias);
-			regmap_read(ktz->regmap, FLAG, &flag);
-			regmap_read(ktz->regmap, BL_BRT_MSB, &brt);
-			dev_info(&ktz->client->dev,
-				 "TEMP ktz8868 %s: id=0x%02x bl_en=0x%02x bias=0x%02x flag=0x%02x brt_msb=0x%02x\n",
-				 ktz->client->name, id, en, bias, flag, brt);
-		}
+	if (!gpios)
+		return 0;
+
+	ret = gpiod_direction_output(gpios->desc[0], 1);
+	if (ret)
+		return ret;
+	usleep_range(1000, 1500);
+
+	if (lcd_bias) {
+		ktz8866_write(ktz, LCD_BOOST_CFG, KTZ8868_LCD_BOOST_CFG_VAL);
+		ktz8866_write(ktz, OUTP_CFG, KTZ8868_OUTP_CFG_VAL);
+		ktz8866_write(ktz, OUTN_CFG, KTZ8868_OUTN_CFG_VAL);
+		ktz8866_write(ktz, LCD_BIAS_CFG1, KTZ8868_LCD_BIAS_CFG1_VAL);
 	}
+
+	if (gpios->ndescs < 3)
+		return 0;
+
+	usleep_range(1000, 1500);
+	ret = gpiod_direction_output(gpios->desc[1], 1);	/* ENP */
+	if (ret)
+		return ret;
+	msleep(8);
+	ret = gpiod_direction_output(gpios->desc[2], 1);	/* ENN */
+	if (ret)
+		return ret;
+	msleep(10);
+
+	return 0;
 }
 
 static int ktz8866_probe(struct i2c_client *client)
@@ -168,6 +249,7 @@ static int ktz8866_probe(struct i2c_client *client)
 		return -ENOMEM;
 
 	ktz->client = client;
+	ktz->variant = (uintptr_t)i2c_get_match_data(client);
 	ktz->regmap = devm_regmap_init_i2c(client, &ktz8866_regmap_config);
 	if (IS_ERR(ktz->regmap))
 		return dev_err_probe(&client->dev, PTR_ERR(ktz->regmap), "failed to init regmap\n");
@@ -179,9 +261,16 @@ static int ktz8866_probe(struct i2c_client *client)
 	if (ret)
 		return dev_err_probe(&client->dev, ret, "get regulator vddneg failed\n");
 
-	ktz->enable_gpios = devm_gpiod_get_array_optional(&client->dev, "enable", GPIOD_OUT_HIGH);
+	ktz->enable_gpios = devm_gpiod_get_array_optional(&client->dev, "enable",
+			ktz->variant == KTZ8868 ? GPIOD_ASIS : GPIOD_OUT_HIGH);
 	if (IS_ERR(ktz->enable_gpios))
 		return PTR_ERR(ktz->enable_gpios);
+
+	if (ktz->variant == KTZ8868) {
+		ret = ktz8868_power_up(ktz);
+		if (ret)
+			return dev_err_probe(&client->dev, ret, "failed to power up\n");
+	}
 
 	memset(&props, 0, sizeof(props));
 	props.type = BACKLIGHT_RAW;
@@ -201,7 +290,8 @@ static int ktz8866_probe(struct i2c_client *client)
 		return dev_err_probe(&client->dev, PTR_ERR(backlight_dev),
 				"failed to register backlight device\n");
 
-	ktz8866_init(ktz);
+	if (ktz->variant == KTZ8866)
+		ktz8866_init(ktz);
 
 	i2c_set_clientdata(client, backlight_dev);
 	backlight_update_status(backlight_dev);
@@ -217,15 +307,15 @@ static void ktz8866_remove(struct i2c_client *client)
 }
 
 static const struct i2c_device_id ktz8866_ids[] = {
-	{ .name = "ktz8866" },
-	{ .name = "ktz8868" },
+	{ .name = "ktz8866", .driver_data = KTZ8866 },
+	{ .name = "ktz8868", .driver_data = KTZ8868 },
 	{ }
 };
 MODULE_DEVICE_TABLE(i2c, ktz8866_ids);
 
 static const struct of_device_id ktz8866_match_table[] = {
-	{ .compatible = "kinetic,ktz8866" },
-	{ .compatible = "kinetic,ktz8868" },
+	{ .compatible = "kinetic,ktz8866", .data = (void *)KTZ8866 },
+	{ .compatible = "kinetic,ktz8868", .data = (void *)KTZ8868 },
 	{},
 };
 MODULE_DEVICE_TABLE(of, ktz8866_match_table);
