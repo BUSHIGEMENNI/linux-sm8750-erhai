@@ -1522,6 +1522,7 @@ void dpu_encoder_assign_crtc(struct drm_encoder *drm_enc, struct drm_crtc *crtc)
 	/* crtc should always be cleared before re-assigning */
 	WARN_ON(crtc && dpu_enc->crtc);
 	dpu_enc->crtc = crtc;
+	DRM_INFO("TEMP assign_crtc enc%u -> %p\n", DRMID(drm_enc), crtc);
 	spin_unlock_irqrestore(&dpu_enc->enc_spinlock, lock_flags);
 }
 
@@ -1544,9 +1545,12 @@ void dpu_encoder_toggle_vblank_for_crtc(struct drm_encoder *drm_enc,
 	spin_lock_irqsave(&dpu_enc->enc_spinlock, lock_flags);
 	if (dpu_enc->crtc != crtc) {
 		spin_unlock_irqrestore(&dpu_enc->enc_spinlock, lock_flags);
+		DRM_INFO("TEMP toggle_vblank enc%u: crtc mismatch (assigned %p, asked %p) enable=%d\n",
+			 DRMID(drm_enc), dpu_enc->crtc, crtc, enable);
 		return;
 	}
 	spin_unlock_irqrestore(&dpu_enc->enc_spinlock, lock_flags);
+	DRM_INFO("TEMP toggle_vblank enc%u enable=%d\n", DRMID(drm_enc), enable);
 
 	for (i = 0; i < dpu_enc->num_phys_encs; i++) {
 		struct dpu_encoder_phys *phys = dpu_enc->phys_encs[i];
