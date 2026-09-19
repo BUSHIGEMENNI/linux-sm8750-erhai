@@ -130,6 +130,20 @@ static int ktz8868_backlight_update_status(struct ktz8866 *ktz,
 		msleep(15);
 		ktz8866_write(ktz, KTZ8868_BL_CTRL, 1);
 		ktz->led_on = true;
+
+		/* TEMP(erhai bring-up): prove the on-sequence landed in silicon. */
+		{
+			unsigned int ctrl = 0, en = 0, bias = 0, flag = 0, msb = 0;
+
+			regmap_read(ktz->regmap, KTZ8868_BL_CTRL, &ctrl);
+			regmap_read(ktz->regmap, BL_EN, &en);
+			regmap_read(ktz->regmap, LCD_BIAS_CFG1, &bias);
+			regmap_read(ktz->regmap, FLAG, &flag);
+			regmap_read(ktz->regmap, BL_BRT_MSB, &msb);
+			dev_info(&ktz->client->dev,
+				 "TEMP ktz8868 on: ctrl=0x%02x bl_en=0x%02x bias=0x%02x flag=0x%02x brt_msb=0x%02x\n",
+				 ctrl, en, bias, flag, msb);
+		}
 	}
 
 	return 0;
