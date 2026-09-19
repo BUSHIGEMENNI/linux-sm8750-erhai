@@ -901,11 +901,13 @@
 		novatek,irq-gpio = <&tlmm 162 IRQ_TYPE_EDGE_FALLING>;
 		novatek,swrst-n8-addr = <0x1fb43e>;
 		novatek,display-coords = <2400 3392>;
-		/* The IC reports in its portrait frame; the panel scans landscape */
+		/* The IC reports in its portrait frame; the panel scans landscape:
+		 * swap, then mirror the (post-swap) X. Measured on the device:
+		 * left-to-right raises X, top-to-bottom raises Y. */
 		touchscreen-size-x = <2400>;
 		touchscreen-size-y = <3392>;
 		touchscreen-swapped-x-y;
-		touchscreen-inverted-y;
+		touchscreen-inverted-x;
 		firmware-name = "novatek/nt36536-xn242.bin";
 	};
 };
