@@ -1890,13 +1890,29 @@ module_param_named(dsc_first_line, erhai_dsc_first_line, uint, 0644);
 static bool erhai_dsc_pre_scr;
 module_param_named(dsc_pre_scr, erhai_dsc_pre_scr, bool, 0644);
 
-/* VESA DSC 1.2a recommended first_line_bpg_offset for the slice height */
+/*
+ * DSC 1.2 first_line_bpg_offset as a function of the slice height (the
+ * stepped recommendation panel vendors bake into their fixed PPS: 12 for
+ * 8-19 lines, 13 for 20-30, 14 for 31-41, 15 above), capped as the spec
+ * requires at the uncompressed bits-per-group minus 3*bpp.
+ */
 static u8 dsi_dsc_1_2_first_line_bpg_offset(const struct drm_dsc_config *dsc)
 {
-	if (dsc->slice_height < 8)
-		return 2 * (dsc->slice_height - 1);
+	u8 bpp = drm_dsc_get_bpp_int(dsc);
+	u8 offset;
 
-	return 12 + DIV_ROUND_UP(9 * min(34, dsc->slice_height - 8), 100);
+	if (dsc->slice_height < 8)
+		offset = 2 * (dsc->slice_height - 1);
+	else if (dsc->slice_height < 20)
+		offset = 12;
+	else if (dsc->slice_height <= 30)
+		offset = 13;
+	else if (dsc->slice_height < 42)
+		offset = 14;
+	else
+		offset = 15;
+
+	return min(offset, (u8)((3 * bpp + 2) * 3 - 3 * bpp));
 }
 
 static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc_config *dsc)
