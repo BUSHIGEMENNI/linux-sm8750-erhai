@@ -348,9 +348,12 @@
 		vreg_l12b_1p8: ldo12 {
 			regulator-name = "vreg_l12b_1p8";
 			/* Panel/touch vddio; the stock display supply entry for this
-			 * board asks for exactly 1.9V on this rail. */
+			 * board asks for exactly 1.9V on this rail. Kept on so the
+			 * panel sees vddio before the KTZ8868 raises the LCD bias at
+			 * backlight probe (stock order: vddio, bias, reset). */
 			regulator-min-microvolt = <1900000>;
 			regulator-max-microvolt = <1900000>;
+			regulator-always-on;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 			regulator-allow-set-load;
 			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
