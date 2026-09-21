@@ -1179,13 +1179,29 @@ static int dsi_7nm_phy_enable(struct msm_dsi_phy *phy,
 	dsi_phy_hw_v4_0_lane_settings(phy);
 
 	/* TEMP(erhai): the panel never acks any DSI command.  Confirm the PHY is
-	 * actually up: read the REFGEN-ready status + lane config back. */
+	 * actually up: read the REFGEN-ready status + lane config back.  The
+	 * common block goes with it, so the first enable and every later one
+	 * can be diffed register by register (TECH-DEBT D19). */
 	{
-		u32 st = readl(base + REG_DSI_7nm_PHY_CMN_PHY_STATUS);
-		u32 lc0 = readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL0);
-		u32 lc1 = readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL1);
-		DRM_INFO("TEMP dsi phy %d ENABLED: phy_status=0x%08x lane_ctrl0=0x%08x lane_ctrl1=0x%08x\n",
-			 phy->id, st, lc0, lc1);
+		DRM_INFO("TEMP dsi phy %d ENABLED usecase=%d: status=%08x ctrl0=%08x ctrl1=%08x ctrl2=%08x ctrl3=%08x clk_cfg0=%08x clk_cfg1=%08x glbl=%08x pll_cntrl=%08x rbuf=%08x vreg0=%08x lane0=%08x lane1=%08x lane2=%08x lane3=%08x lane4=%08x lptx_str=%08x\n",
+			 phy->id, phy->usecase,
+			 readl(base + REG_DSI_7nm_PHY_CMN_PHY_STATUS),
+			 readl(base + REG_DSI_7nm_PHY_CMN_CTRL_0),
+			 readl(base + REG_DSI_7nm_PHY_CMN_CTRL_1),
+			 readl(base + REG_DSI_7nm_PHY_CMN_CTRL_2),
+			 readl(base + REG_DSI_7nm_PHY_CMN_CTRL_3),
+			 readl(base + REG_DSI_7nm_PHY_CMN_CLK_CFG0),
+			 readl(base + REG_DSI_7nm_PHY_CMN_CLK_CFG1),
+			 readl(base + REG_DSI_7nm_PHY_CMN_GLBL_CTRL),
+			 readl(base + REG_DSI_7nm_PHY_CMN_PLL_CNTRL),
+			 readl(base + REG_DSI_7nm_PHY_CMN_RBUF_CTRL),
+			 readl(base + REG_DSI_7nm_PHY_CMN_VREG_CTRL_0),
+			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL0),
+			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL1),
+			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL2),
+			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL3),
+			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL4),
+			 readl(base + REG_DSI_7nm_PHY_CMN_GLBL_LPTX_STR_CTRL));
 	}
 
 	DBG("DSI%d PHY enabled", phy->id);
