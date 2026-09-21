@@ -32,6 +32,17 @@ struct novatek_nt36536 {
 	struct dentry *dbg_dir;
 };
 
+/*
+ * TEMP(erhai): the panel's supplies are always on (TECH-DEBT D14), so a
+ * blank does not actually power it down -- and the DSI command DMA hangs on
+ * every enable after the first (TECH-DEBT D19), which is what makes the
+ * re-initialisation fail.  With this set, prepare and unprepare send nothing
+ * and hold the reset line, to find out whether a panel that was never powered
+ * down needs re-initialising at all.  Drop before erhai/main.
+ */
+static int temp_skip_reinit;
+module_param_named(temp_skip_reinit, temp_skip_reinit, int, 0644);
+
 static inline struct novatek_nt36536 *to_novatek_nt36536(struct drm_panel *panel)
 {
 	return container_of(panel, struct novatek_nt36536, panel);
@@ -206,6 +217,11 @@ static int novatek_nt36536_prepare(struct drm_panel *panel)
 		return ret;
 
 	usleep_range(2000, 3000);
+	if (temp_skip_reinit) {
+		dev_info(&ctx->dsi[0]->dev,
+			 "TEMP skipping panel reset and on-commands\n");
+		return 0;
+	}
 	novatek_nt36536_reset(ctx);
 
 	/*
@@ -238,6 +254,11 @@ static int novatek_nt36536_unprepare(struct drm_panel *panel)
 	struct novatek_nt36536 *ctx = to_novatek_nt36536(panel);
 	struct device *dev = &ctx->dsi[0]->dev;
 	int ret;
+
+	if (temp_skip_reinit) {
+		dev_info(dev, "TEMP skipping panel off-commands and reset\n");
+		return 0;
+	}
 
 	ret = novatek_nt36536_off(ctx);
 	if (ret < 0)
