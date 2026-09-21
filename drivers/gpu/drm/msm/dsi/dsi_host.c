@@ -50,7 +50,7 @@
  *
  * Drop all three before erhai/main.
  */
-static int temp_dsi_regdump = 1;
+static int temp_dsi_regdump;
 module_param_named(temp_dsi_regdump, temp_dsi_regdump, int, 0644);
 static int temp_dsi_xfer_setrate = 1;
 module_param_named(temp_dsi_xfer_setrate, temp_dsi_xfer_setrate, int, 0644);
@@ -63,7 +63,7 @@ module_param_named(temp_dsi_xfer_hs, temp_dsi_xfer_hs, int, 0644);
  * would disappear.  temp_dsi_blockdump=1 dumps the whole 1 KiB control block at
  * every enable, so the first enable and the second can be diffed word by word.
  */
-static int temp_dsi_blockdump = 1;
+static int temp_dsi_blockdump;
 module_param_named(temp_dsi_blockdump, temp_dsi_blockdump, int, 0644);
 /* Clear TRIG_CTRL.BLOCK_DMA_WITHIN_FRAME, the one bit that can hold a
  * triggered DMA back on a video-mode link with no frames running. */

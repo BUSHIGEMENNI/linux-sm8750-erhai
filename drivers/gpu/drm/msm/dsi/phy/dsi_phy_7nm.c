@@ -12,7 +12,7 @@
 #include "dsi_phy.h"
 
 /* TEMP(erhai): full PHY dump switch (TECH-DEBT D19), drop before erhai/main. */
-static int temp_phy_blockdump = 1;
+static int temp_phy_blockdump;
 module_param_named(temp_phy_blockdump, temp_phy_blockdump, int, 0644);
 #include "dsi.xml.h"
 #include "dsi_phy_7nm.xml.h"
