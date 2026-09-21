@@ -869,6 +869,8 @@ static void temp_dsi_block(struct msm_dsi_host *msm_host, const char *tag)
 			 dsi_read(msm_host, offset + 0x1c));
 }
 
+void msm_dsi_host_temp_dump(struct mipi_dsi_host *host, const char *tag);
+
 /* TEMP(erhai): one line per link, so boot and re-enable can be diffed. */
 static void temp_dsi_regs(struct msm_dsi_host *msm_host, const char *tag)
 {
@@ -897,6 +899,12 @@ static void temp_dsi_regs(struct msm_dsi_host *msm_host, const char *tag)
 		 dsi_read(msm_host, REG_DSI_EOT_PACKET_CTRL),
 		 dsi_read(msm_host, REG_DSI_CLKOUT_TIMING_CTRL),
 		 dsi_read(msm_host, REG_DSI_CPHY_MODE_CTRL));
+}
+
+/* TEMP(erhai): the manager calls this for the other link of a bonded pair. */
+void msm_dsi_host_temp_dump(struct mipi_dsi_host *host, const char *tag)
+{
+	temp_dsi_regs(to_msm_dsi_host(host), tag);
 }
 
 static void dsi_ctrl_enable(struct msm_dsi_host *msm_host,
@@ -1583,9 +1591,12 @@ static int dsi_cmd_dma_tx(struct msm_dsi_host *msm_host, int len)
 					msecs_to_jiffies(200));
 		DBG("ret=%d", ret);
 		if (ret == 0) {
-			/* TEMP(erhai): what the link looked like when the DMA
-			 * never reported done. */
+			/* TEMP(erhai): what both links looked like when the DMA
+			 * never reported done -- the pair is triggered
+			 * together, so whether the other one finished says
+			 * whether this is one link or the whole block. */
 			temp_dsi_regs(msm_host, "dma-timeout");
+			msm_dsi_manager_temp_dump_peer(msm_host->id);
 			ret = -ETIMEDOUT;
 		} else {
 			ret = len;
