@@ -127,8 +127,6 @@ struct nvt_ts_data {
 	bool resources_ready;
 	bool stopping;
 	bool touch_awake;
-	/* Protected by lock; valid only with the retained-panel workaround. */
-	bool firmware_retained;
 	const char *fw_name;
 	uint8_t fw_ver;
 	uint8_t x_num;

@@ -41,12 +41,6 @@ uint8_t esd_retry = 0;
 struct nvt_ts_data *ts;
 static struct drm_panel_follower_funcs nt36536_panel_follower_funcs;
 
-/* Downstream companion to the retained-panel workaround; opt-in at boot. */
-static bool retain_on_blank;
-module_param(retain_on_blank, bool, 0400);
-MODULE_PARM_DESC(retain_on_blank,
-		"Retain follower firmware when the panel stays powered during blanking");
-
 #if BOOT_UPDATE_FIRMWARE
 static struct workqueue_struct *nvt_fwu_wq;
 #endif
@@ -1994,7 +1988,6 @@ static int32_t nvt_ts_suspend(struct device *dev)
 {
 	uint8_t buf[4] = {0};
 	bool was_awake;
-	bool retain = retain_on_blank && ts->is_panel_follower;
 #if MT_PROTOCOL_B
 	uint32_t i = 0;
 #endif
@@ -2014,7 +2007,7 @@ static int32_t nvt_ts_suspend(struct device *dev)
 	nvt_esd_check_enable(false);
 #endif /* #if NVT_TOUCH_ESD_PROTECT */
 
-	if (retain || !ts->db_wakeup) {
+	if (!ts->db_wakeup) {
 		if (!ts->irq_enabled)
 			NVT_LOG("IRQ already disabled\n");
 		else
@@ -2030,21 +2023,12 @@ static int32_t nvt_ts_suspend(struct device *dev)
 
 	NVT_LOG("suspend start\n");
 
-	if (!retain && ts->pen_input_dev_enable) {
+	if (ts->pen_input_dev_enable) {
 		NVT_LOG("if enable pen, will close it\n");
 		__nvt_set_pen_state(true);
 	}
 
-	if (retain) {
-		/*
-		 * The display and touch MCU share a TDDI. The retained panel
-		 * will not be reset or initialized on the next prepare, so do
-		 * not put the shared chip to sleep or reload its firmware.
-		 * IRQs and all reported contacts are quiesced as usual.
-		 */
-		ts->firmware_retained = true;
-		NVT_LOG("retaining firmware across panel blank (IRQ off)\n");
-	} else if (ts->db_wakeup) {
+	if (ts->db_wakeup) {
 		/*---write command to enter "wakeup gesture mode"---*/
 		/*DoubleClick wakeup CMD was sent by display to meet timing*/
 		/*
@@ -2137,17 +2121,6 @@ static int32_t nvt_ts_resume(struct device *dev)
 	NVT_LOG("follower resume #%u start\n", ts->resume_count);
 	ts->ic_state = NVT_IC_RESUME_IN;
 
-	if (ts->firmware_retained) {
-		/* Never silently reset the TDDI underneath the retained display. */
-		ret = nvt_check_fw_reset_state(RESET_STATE_INIT);
-		if (ret) {
-			NVT_ERR("retained firmware is not ready: %d\n", ret);
-			goto resume_fail;
-		}
-		NVT_LOG("resuming retained firmware without reset or download\n");
-		goto firmware_ready;
-	}
-
 	/*
 	 * The vendor core waits touchpanel,irq_need_dev_resume_time (500ms in
 	 * the stock dtsi) after resume before touching the IC, letting the
@@ -2177,18 +2150,15 @@ static int32_t nvt_ts_resume(struct device *dev)
 	 * on the host side just times out and shuts the IRQ off.
 	 */
 
-firmware_ready:
 	if (ts->is_panel_follower && !nvt_panel_is_on(ts)) {
 		ret = -EHOSTDOWN;
 		goto resume_fail;
 	}
 
-	if (!ts->firmware_retained) {
-		ret = __nvt_set_pen_state(false);
-		if (ret) {
-			NVT_ERR("failed to enable pen mailbox: %d\n", ret);
-			goto resume_fail;
-		}
+	ret = __nvt_set_pen_state(false);
+	if (ret) {
+		NVT_ERR("failed to enable pen mailbox: %d\n", ret);
+		goto resume_fail;
 	}
 
 	if (ts->is_panel_follower && !nvt_commit_follower_awake(ts)) {
@@ -2197,7 +2167,6 @@ firmware_ready:
 	}
 	if (!ts->is_panel_follower)
 		nvt_set_touch_awake_state(ts, true);
-	ts->firmware_retained = false;
 
 	if (likely(ts->ic_state == NVT_IC_RESUME_IN)) {
 		ts->ic_state = NVT_IC_RESUME_OUT;
