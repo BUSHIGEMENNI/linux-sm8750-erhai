@@ -8,6 +8,12 @@
 #include "msm_kms.h"
 #include "dsi.h"
 
+/* Downstream diagnostic for panels kept initialized across blanking. */
+static bool retain_dsi_link;
+module_param(retain_dsi_link, bool, 0400);
+MODULE_PARM_DESC(retain_dsi_link,
+		"Keep the fixed-mode bonded video link active across display blanking");
+
 #define DSI_CLOCK_MASTER	DSI_0
 #define DSI_CLOCK_SLAVE		DSI_1
 
@@ -26,6 +32,8 @@ struct msm_dsi_manager {
 	bool is_bonded_dsi;
 	bool is_sync_needed;
 	int master_dsi_link_id;
+	bool retained_link_active;
+	struct drm_display_mode retained_mode;
 };
 
 static struct msm_dsi_manager msm_dsim_glb;
@@ -42,6 +50,17 @@ static inline struct msm_dsi *dsi_mgr_get_dsi(int id)
 static inline struct msm_dsi *dsi_mgr_get_other_dsi(int id)
 {
 	return msm_dsim_glb.dsi[(id + 1) % DSI_MAX];
+}
+
+static bool dsi_mgr_retain_link(void)
+{
+	struct msm_dsi *mdsi = dsi_mgr_get_dsi(DSI_0);
+	struct msm_dsi *sdsi = dsi_mgr_get_dsi(DSI_1);
+
+	return retain_dsi_link && IS_BONDED_DSI() &&
+		IS_MASTER_DSI_LINK(DSI_0) && mdsi && sdsi &&
+		(msm_dsi_host_get_mode_flags(mdsi->host) & MIPI_DSI_MODE_VIDEO) &&
+		(msm_dsi_host_get_mode_flags(sdsi->host) & MIPI_DSI_MODE_VIDEO);
 }
 
 static int dsi_mgr_parse_of(struct device_node *np, int id)
@@ -290,6 +309,11 @@ static void dsi_mgr_bridge_pre_enable(struct drm_bridge *bridge)
 	if (is_bonded_dsi && !IS_MASTER_DSI_LINK(id))
 		return;
 
+	if (dsi_mgr_retain_link() && msm_dsim_glb.retained_link_active) {
+		dev_info(&msm_dsi->pdev->dev, "reusing retained DSI link\n");
+		return;
+	}
+
 	ret = dsi_mgr_bridge_power_on(bridge);
 	if (ret) {
 		dev_err(&msm_dsi->pdev->dev, "Power on failed: %d\n", ret);
@@ -309,6 +333,9 @@ static void dsi_mgr_bridge_pre_enable(struct drm_bridge *bridge)
 			goto host1_en_fail;
 		}
 	}
+
+	if (dsi_mgr_retain_link())
+		msm_dsim_glb.retained_link_active = true;
 
 	return;
 
@@ -341,6 +368,12 @@ static void dsi_mgr_bridge_post_disable(struct drm_bridge *bridge)
 	int ret;
 
 	DBG("id=%d", id);
+
+	if (dsi_mgr_retain_link() && msm_dsim_glb.retained_link_active) {
+		if (IS_MASTER_DSI_LINK(id))
+			dev_info(&msm_dsi->pdev->dev, "retaining DSI link while blanked\n");
+		return;
+	}
 
 	/*
 	 * Do nothing with the host if it is slave-DSI in case of bonded DSI.
@@ -397,6 +430,9 @@ static void dsi_mgr_bridge_mode_set(struct drm_bridge *bridge,
 	if (is_bonded_dsi && !IS_MASTER_DSI_LINK(id))
 		return;
 
+	if (dsi_mgr_retain_link() && !msm_dsim_glb.retained_link_active)
+		drm_mode_copy(&msm_dsim_glb.retained_mode, adjusted_mode);
+
 	msm_dsi_host_set_display_mode(host, adjusted_mode);
 	if (is_bonded_dsi && other_dsi)
 		msm_dsi_host_set_display_mode(other_dsi->host, adjusted_mode);
@@ -412,6 +448,11 @@ static enum drm_mode_status dsi_mgr_bridge_mode_valid(struct drm_bridge *bridge,
 	struct platform_device *pdev = msm_dsi->pdev;
 	struct dev_pm_opp *opp;
 	unsigned long byte_clk_rate;
+
+	/* This opt-in workaround cannot reprogram a live retained link. */
+	if (dsi_mgr_retain_link() && msm_dsim_glb.retained_link_active &&
+	    !drm_mode_equal(&msm_dsim_glb.retained_mode, mode))
+		return MODE_BAD;
 
 	byte_clk_rate = dsi_byte_clk_get_rate(host, IS_BONDED_DSI(), mode);
 
@@ -601,6 +642,25 @@ fail:
 void msm_dsi_manager_unregister(struct msm_dsi *msm_dsi)
 {
 	struct msm_dsi_manager *msm_dsim = &msm_dsim_glb;
+	int i;
+
+	/* Retention must not leak clocks, IRQ references or supplies on unbind. */
+	if (msm_dsim->retained_link_active) {
+		msm_dsim->retained_link_active = false;
+		for (i = 0; i < DSI_MAX; i++) {
+			struct msm_dsi *dsi = msm_dsim->dsi[i];
+
+			if (!dsi)
+				continue;
+			msm_dsi_host_disable(dsi->host);
+			msm_dsi_host_disable_irq(dsi->host);
+			msm_dsi_host_power_off(dsi->host);
+		}
+		for (i = 0; i < DSI_MAX; i++) {
+			if (msm_dsim->dsi[i] && msm_dsim->dsi[i]->phy_enabled)
+				dsi_mgr_phy_disable(i);
+		}
+	}
 
 	if (msm_dsi->host)
 		msm_dsi_host_unregister(msm_dsi->host);
