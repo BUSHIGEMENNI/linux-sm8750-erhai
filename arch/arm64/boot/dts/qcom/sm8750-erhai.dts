@@ -25,6 +25,31 @@
 		serial0 = &uart7;
 	};
 
+	sound {
+		compatible = "qcom,sm8750-sndcard", "qcom,sm8450-sndcard";
+		model = "OnePlus-Pad-2-Pro";
+		audio-routing = "AMIC1", "MIC BIAS1",
+				"AMIC5", "MIC BIAS3",
+				"TX SWR_INPUT0", "ADC1_OUTPUT",
+				"TX SWR_INPUT3", "ADC4_OUTPUT";
+
+		wcd-capture-dai-link {
+			link-name = "WCD Capture";
+
+			cpu {
+				sound-dai = <&q6apmbedai TX_CODEC_DMA_TX_3>;
+			};
+
+			codec {
+				sound-dai = <&wcd939x 1>, <&swr2 0>, <&lpass_txmacro 0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+	};
+
 	wcd939x: audio-codec {
 		compatible = "qcom,wcd9390-codec";
 		#sound-dai-cells = <1>;
