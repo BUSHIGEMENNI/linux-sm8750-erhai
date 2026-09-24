@@ -856,6 +856,54 @@
 	status = "okay";
 };
 
+&pmk8550 {
+	pmk8550_adc: adc@9000 {
+		compatible = "qcom,spmi-adc5-gen3";
+		reg = <0x9000>, <0x9100>;
+		interrupts = <0x0 0x90 0x1 IRQ_TYPE_EDGE_RISING>,
+			     <0x0 0x91 0x1 IRQ_TYPE_EDGE_RISING>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		#io-channel-cells = <1>;
+
+		channel@3 {
+			reg = <0x3>;
+			label = "pmk8550-die";
+			qcom,pre-scaling = <1 1>;
+		};
+
+		channel@44 {
+			reg = <0x44>;
+			label = "xo-therm";
+			qcom,pre-scaling = <1 1>;
+			qcom,ratiometric;
+			qcom,hw-settle-time = <200>;
+		};
+
+		channel@103 {
+			reg = <0x103>;
+			label = "pm8550-die";
+			qcom,pre-scaling = <1 1>;
+		};
+
+		channel@144 {
+			reg = <0x144>;
+			label = "skin-therm";
+			qcom,pre-scaling = <1 1>;
+			qcom,ratiometric;
+			qcom,hw-settle-time = <200>;
+		};
+
+		channel@149 {
+			reg = <0x149>;
+			label = "gpio2-therm";
+			qcom,pre-scaling = <1 1>;
+			qcom,ratiometric;
+			qcom,hw-settle-time = <200>;
+		};
+	};
+};
+
 &pmk8550_rtc {
 	nvmem-cells = <&rtc_offset>;
 	nvmem-cell-names = "offset";
