@@ -116,7 +116,7 @@ static int sc8280xp_tdm_hw_params(struct snd_pcm_substream *substream,
 	if (!bclk_freq)
 		return -EINVAL;
 
-	if (data->priv->mi2s_bclk_enable) {
+	if (data->snd_soc_common_priv->mi2s_bclk_enable) {
 		ret = snd_soc_dai_set_sysclk(cpu_dai, LPAIF_MI2S_BCLK, bclk_freq,
 					     SND_SOC_CLOCK_IN);
 		if (ret) {
@@ -126,7 +126,7 @@ static int sc8280xp_tdm_hw_params(struct snd_pcm_substream *substream,
 		}
 	}
 
-	if (data->priv->codec_sysclk_set) {
+	if (data->snd_soc_common_priv->codec_sysclk_set) {
 		for_each_rtd_codec_dais(rtd, i, codec_dai) {
 			ret = snd_soc_dai_set_sysclk(codec_dai, 0, bclk_freq,
 						     SND_SOC_CLOCK_IN);
