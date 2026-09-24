@@ -92,14 +92,17 @@ static int sc8280xp_tdm_hw_params(struct snd_pcm_substream *substream,
 	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
 	struct snd_soc_dai *codec_dai;
 	struct qcom_snd_tdm_slot_cfg cpu_cfg;
-	struct qcom_snd_tdm_slot_cfg codec_cfg;
+	struct qcom_snd_tdm_slot_cfg *codec_cfg __free(kfree) =
+		kcalloc(rtd->dai_link->num_codecs, sizeof(*codec_cfg), GFP_KERNEL);
 	unsigned int bclk_freq;
 	int ret;
 	int i;
 
-	ret = qcom_snd_get_dai_tdm_slots(rtd, &cpu_cfg, &codec_cfg);
+	if (!codec_cfg)
+		return -ENOMEM;
+	ret = qcom_snd_get_dai_tdm_slots(rtd, &cpu_cfg, codec_cfg);
 	if (ret)
-		return ret == -EINVAL ? 0 : ret;
+		return ret == -ENOENT ? 0 : ret;
 
 	if (!cpu_cfg.slots)
 		return 0;
@@ -108,7 +111,7 @@ static int sc8280xp_tdm_hw_params(struct snd_pcm_substream *substream,
 	if (ret)
 		return ret;
 
-	ret = qcom_snd_apply_dai_tdm_slots_cfg(rtd, &cpu_cfg, &codec_cfg);
+	ret = qcom_snd_apply_dai_tdm_slots_cfg(rtd, &cpu_cfg, codec_cfg);
 	if (ret)
 		return ret;
 
