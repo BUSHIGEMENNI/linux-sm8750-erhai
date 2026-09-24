@@ -734,6 +734,16 @@
 	};
 };
 
+&i2c_hub_4 {
+	clock-frequency = <400000>;
+	status = "okay";
+};
+
+&i2c_hub_9 {
+	clock-frequency = <400000>;
+	status = "okay";
+};
+
 &mdss {
 	status = "okay";
 };
@@ -831,20 +841,6 @@
 };
 
 &gpi_dma1 {
-	status = "okay";
-};
-
-&i2c_master_hub_0 {
-	status = "okay";
-};
-
-&i2c_hub_4 {
-	clock-frequency = <400000>;
-	status = "okay";
-};
-
-&i2c_hub_9 {
-	clock-frequency = <400000>;
 	status = "okay";
 };
 
