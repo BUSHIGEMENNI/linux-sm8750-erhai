@@ -18,8 +18,31 @@ description: |
   KTZ8868 designs can additionally wire ENP and ENN pins to enable the lcd
   bias outputs, hence up to three enable GPIOs.
 
+  Without a led child node the chip registers a backlight device. A KTZ8868
+  may instead describe its LED string in a led child node, which the chip
+  registers as an LED class device. This allows boards that light one panel
+  from several chips to combine them in a single led-backlight device.
+
 allOf:
   - $ref: common.yaml#
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: kinetic,ktz8866
+    then:
+      properties:
+        led: false
+  - if:
+      required:
+        - led
+    then:
+      properties:
+        current-num-sinks: false
+        default-brightness: false
+        max-brightness: false
+        brightness-levels: false
+        default-brightness-level: false
 
 properties:
   compatible:
@@ -42,7 +65,9 @@ properties:
     maxItems: 3
 
   current-num-sinks:
-    description: number of the LED current sinks' channels.
+    description:
+      Number of the LED current sinks' channels, starting from LED1. Not used
+      together with a led child node, whose led-sources selects the sinks.
     $ref: /schemas/types.yaml#/definitions/uint32
     enum: [1, 2, 3, 4, 5, 6]
 
@@ -61,6 +86,27 @@ properties:
   kinetic,enable-lcd-bias:
     description: Set if we want to output bias power supply for LCD.
     type: boolean
+
+  led:
+    type: object
+    $ref: /schemas/leds/common.yaml#
+    unevaluatedProperties: false
+    description:
+      LED string driven by the current sinks, registered as an LED class
+      device instead of a backlight device.
+
+    properties:
+      led-sources:
+        description:
+          Current sinks the LED string is connected to. Sinks LED1 to LED6
+          are numbered 0 to 5.
+        minItems: 1
+        maxItems: 6
+        items:
+          maximum: 5
+
+    required:
+      - led-sources
 
 required:
   - compatible
@@ -86,5 +132,25 @@ examples:
             kinetic,current-ramp-delay-ms = <128>;
             kinetic,led-enable-ramp-delay-ms = <1>;
             kinetic,enable-lcd-bias;
+        };
+    };
+  - |
+    #include <dt-bindings/gpio/gpio.h>
+    #include <dt-bindings/leds/common.h>
+
+    i2c {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        backlight@11 {
+            compatible = "kinetic,ktz8868";
+            reg = <0x11>;
+            enable-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>;
+
+            led {
+                function = LED_FUNCTION_BACKLIGHT;
+                color = <LED_COLOR_ID_WHITE>;
+                led-sources = <0 1 2 4 5>;
+            };
         };
     };
