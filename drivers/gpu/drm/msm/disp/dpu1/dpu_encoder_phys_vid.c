@@ -440,9 +440,6 @@ static int dpu_encoder_phys_vid_control_vblank_irq(
 
 end:
 	mutex_unlock(&phys_enc->vblank_ctl_lock);
-	DRM_INFO("TEMP vblank_ctl intf%d enable=%d refcnt %d->%d ret=%d master=%d\n",
-		 phys_enc->hw_intf->idx - INTF_0, enable, refcount,
-		 phys_enc->vblank_refcount, ret, dpu_encoder_phys_vid_is_master(phys_enc));
 	if (ret) {
 		DRM_ERROR("failed: id:%u intf:%d ret:%d enable:%d refcnt:%d\n",
 			  DRMID(phys_enc->parent),

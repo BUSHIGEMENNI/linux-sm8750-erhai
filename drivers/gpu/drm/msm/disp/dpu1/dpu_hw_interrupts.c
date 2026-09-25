@@ -668,7 +668,6 @@ int dpu_core_irq_register_callback(struct dpu_kms *dpu_kms,
 	trace_dpu_core_irq_register_callback(DPU_IRQ_REG(irq_idx), DPU_IRQ_BIT(irq_idx), irq_cb);
 	irq_entry->arg = irq_arg;
 	irq_entry->cb = irq_cb;
-	DRM_INFO("TEMP irq register [%d,%d] %ps\n", DPU_IRQ_REG(irq_idx), DPU_IRQ_BIT(irq_idx), irq_cb);
 
 	ret = dpu_hw_intr_enable_irq_locked(
 				dpu_kms->hw_intr,
@@ -711,7 +710,6 @@ int dpu_core_irq_unregister_callback(struct dpu_kms *dpu_kms,
 	spin_lock_irqsave(&dpu_kms->hw_intr->irq_lock, irq_flags);
 	trace_dpu_core_irq_unregister_callback(DPU_IRQ_REG(irq_idx), DPU_IRQ_BIT(irq_idx));
 
-	DRM_INFO("TEMP irq unregister [%d,%d]\n", DPU_IRQ_REG(irq_idx), DPU_IRQ_BIT(irq_idx));
 	ret = dpu_hw_intr_disable_irq_locked(dpu_kms->hw_intr, irq_idx);
 	if (ret)
 		DPU_ERROR("Failed to disable IRQ=[%d, %d]: %d\n",
