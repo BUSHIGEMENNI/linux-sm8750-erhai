@@ -236,25 +236,15 @@
 		};
 	};
 
-	/* Pogo keyboard dock: powered via gpio85, UART level path via gpio83.
-	 * regulator-fixed is reliable where a bare gpio-hog on tlmm did not
-	 * drive the pins. Always-on so an attached keyboard is live. */
+	/*
+	 * Switched supply of the keyboard pogo pin connector. The keyboard
+	 * driver keeps it off until the attach sense line reports a keyboard.
+	 */
 	pogo_kb_pwr: regulator-pogo-kb-pwr {
 		compatible = "regulator-fixed";
 		regulator-name = "pogo_kb_pwr";
 		gpio = <&tlmm 85 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
-		regulator-always-on;
-		regulator-boot-on;
-	};
-
-	pogo_kb_txen: regulator-pogo-kb-txen {
-		compatible = "regulator-fixed";
-		regulator-name = "pogo_kb_txen";
-		gpio = <&tlmm 83 GPIO_ACTIVE_HIGH>;
-		enable-active-high;
-		regulator-always-on;
-		regulator-boot-on;
 	};
 
 	/*
@@ -1314,6 +1304,50 @@
 			bias-pull-down;
 		};
 	};
+
+	pogo_kb_detect: pogo-kb-detect-state {
+		pins = "gpio96";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
+	/*
+	 * The keyboard data line is shared by TX and RX through a direction
+	 * switch, so neither pin gets a pull. With the port closed, TX is left
+	 * as a floating GPIO like on the stock firmware.
+	 */
+	pogo_kb_uart_default: pogo-kb-uart-default-state {
+		tx-pins {
+			pins = "gpio2";
+			function = "qup2_se0";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		rx-pins {
+			pins = "gpio3";
+			function = "qup2_se0";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+
+	pogo_kb_uart_sleep: pogo-kb-uart-sleep-state {
+		tx-pins {
+			pins = "gpio2";
+			function = "gpio";
+			drive-strength = <8>;
+			bias-disable;
+		};
+
+		rx-pins {
+			pins = "gpio3";
+			function = "qup2_se0";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
 };
 
 &uart7 {
@@ -1377,7 +1411,25 @@
 };
 
 &uart_kb {
+	pinctrl-0 = <&pogo_kb_uart_default>;
+	pinctrl-1 = <&pogo_kb_uart_sleep>;
+	pinctrl-names = "default", "sleep";
+
 	status = "okay";
+
+	keyboard {
+		compatible = "oneplus,pad2pro-pogo-keyboard";
+
+		vdd-supply = <&pogo_kb_pwr>;
+		tx-enable-gpios = <&tlmm 83 GPIO_ACTIVE_HIGH>;
+		detect-gpios = <&tlmm 96 GPIO_ACTIVE_LOW>;
+		interrupts-extended = <&tlmm 96 IRQ_TYPE_EDGE_FALLING>;
+		current-speed = <921600>;
+		wakeup-source;
+
+		pinctrl-0 = <&pogo_kb_detect>;
+		pinctrl-names = "default";
+	};
 };
 
 &uart14 {
