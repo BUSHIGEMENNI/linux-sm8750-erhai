@@ -45,6 +45,9 @@
 				"TX SWR_INPUT0", "ADC1_OUTPUT",
 				"TX SWR_INPUT3", "ADC4_OUTPUT";
 
+		pinctrl-0 = <&sec_tdm_active>;
+		pinctrl-names = "default";
+
 		wcd-capture-dai-link {
 			link-name = "WCD Capture";
 
@@ -54,6 +57,66 @@
 
 			codec {
 				sound-dai = <&wcd939x 1>, <&swr2 0>, <&lpass_txmacro 0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+
+		/*
+		 * Secondary TDM at 48 kHz: eight 32-bit slots, DSP_B framing,
+		 * clocks from the SoC. Each amplifier takes the slot equal to
+		 * its stock channel index.
+		 */
+		speaker-playback-dai-link {
+			link-name = "Speaker Playback";
+			dai-format = "dsp_b";
+			convert-rate = <48000>;
+			convert-channels = <8>;
+			convert-sample-format = "s32_le";
+
+			cpu {
+				sound-dai = <&q6apmbedai SECONDARY_TDM_RX_0>;
+				dai-tdm-slot-num = <8>;
+				dai-tdm-slot-width = <32>;
+				dai-tdm-slot-rx-mask = <1 1 1 1 1 1 1 1>;
+			};
+
+			codec-0 {
+				sound-dai = <&spk_amp0>;
+				dai-tdm-slot-tx-mask = <1>;
+				dai-tdm-slot-rx-mask = <1>;
+			};
+
+			codec-1 {
+				sound-dai = <&spk_amp1>;
+				dai-tdm-slot-tx-mask = <0 1>;
+				dai-tdm-slot-rx-mask = <0 1>;
+			};
+
+			codec-2 {
+				sound-dai = <&spk_amp2>;
+				dai-tdm-slot-tx-mask = <0 0 1>;
+				dai-tdm-slot-rx-mask = <0 0 1>;
+			};
+
+			codec-3 {
+				sound-dai = <&spk_amp3>;
+				dai-tdm-slot-tx-mask = <0 0 0 1>;
+				dai-tdm-slot-rx-mask = <0 0 0 1>;
+			};
+
+			codec-5 {
+				sound-dai = <&spk_amp5>;
+				dai-tdm-slot-tx-mask = <0 0 0 0 0 1>;
+				dai-tdm-slot-rx-mask = <0 0 0 0 0 1>;
+			};
+
+			codec-6 {
+				sound-dai = <&spk_amp6>;
+				dai-tdm-slot-tx-mask = <0 0 0 0 0 0 1>;
+				dai-tdm-slot-rx-mask = <0 0 0 0 0 0 1>;
 			};
 
 			platform {
@@ -1074,6 +1137,21 @@
 	status = "okay";
 };
 
+&q6apmbedai {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/*
+	 * The PRM clock driver exposes no secondary TDM bit clock. Use the
+	 * secondary MI2S bit clock, inferred to drive the same interface.
+	 */
+	dai@28 {
+		reg = <SECONDARY_TDM_RX_0>;
+		clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clock-names = "bclk";
+	};
+};
+
 &qupv3_1 {
 	status = "okay";
 };
@@ -1205,6 +1283,36 @@
 		function = "gpio";
 		drive-strength = <6>;
 		bias-disable;
+	};
+
+	sec_tdm_active: sec-tdm-active-state {
+		sck-pins {
+			pins = "gpio121";
+			function = "i2s1_sck";
+			drive-strength = <6>;
+			bias-disable;
+		};
+
+		data0-pins {
+			pins = "gpio122";
+			function = "i2s1_data0";
+			drive-strength = <6>;
+			bias-disable;
+		};
+
+		ws-pins {
+			pins = "gpio123";
+			function = "i2s1_ws";
+			drive-strength = <6>;
+			bias-disable;
+		};
+
+		data1-pins {
+			pins = "gpio124";
+			function = "i2s1_data1";
+			drive-strength = <6>;
+			bias-pull-down;
+		};
 	};
 };
 
