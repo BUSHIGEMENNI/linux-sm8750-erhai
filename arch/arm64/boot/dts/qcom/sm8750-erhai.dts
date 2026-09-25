@@ -194,6 +194,22 @@
 		regulator-boot-on;
 	};
 
+	/*
+	 * Placeholder for the DVDD input of the six AW88261 amplifiers. The
+	 * stock DT gives the amplifiers no supply and its driver requests none;
+	 * their chip IDs read back on both stock and mainline without any
+	 * consumer holding a rail, which suggests DVDD is up whenever the SoC
+	 * runs. Which PMIC output feeds it is unknown, so no voltage, parent
+	 * supply or control is described here. Replace this node with that
+	 * output once it is identified.
+	 */
+	spk_amp_dvdd: regulator-spk-amp-dvdd {
+		compatible = "regulator-fixed";
+		regulator-name = "spk_amp_dvdd";
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
 	vph_pwr: vph-pwr-regulator {
 		compatible = "regulator-fixed";
 
@@ -806,11 +822,71 @@
 &i2c_hub_4 {
 	clock-frequency = <400000>;
 	status = "okay";
+
+	spk_amp3: audio-codec@34 {
+		compatible = "awinic,aw88261";
+		reg = <0x34>;
+		#sound-dai-cells = <0>;
+		dvdd-supply = <&spk_amp_dvdd>;
+		firmware-name = "awinic/erhai/aw88261_acf.bin";
+		sound-name-prefix = "Amp3";
+		awinic,audio-channel = <3>;
+	};
+
+	spk_amp1: audio-codec@35 {
+		compatible = "awinic,aw88261";
+		reg = <0x35>;
+		#sound-dai-cells = <0>;
+		dvdd-supply = <&spk_amp_dvdd>;
+		firmware-name = "awinic/erhai/aw88261_acf.bin";
+		sound-name-prefix = "Amp1";
+		awinic,audio-channel = <1>;
+	};
+
+	spk_amp5: audio-codec@36 {
+		compatible = "awinic,aw88261";
+		reg = <0x36>;
+		#sound-dai-cells = <0>;
+		dvdd-supply = <&spk_amp_dvdd>;
+		firmware-name = "awinic/erhai/aw88261_acf.bin";
+		sound-name-prefix = "Amp5";
+		awinic,audio-channel = <5>;
+	};
 };
 
 &i2c_hub_9 {
 	clock-frequency = <400000>;
 	status = "okay";
+
+	spk_amp0: audio-codec@34 {
+		compatible = "awinic,aw88261";
+		reg = <0x34>;
+		#sound-dai-cells = <0>;
+		dvdd-supply = <&spk_amp_dvdd>;
+		firmware-name = "awinic/erhai/aw88261_acf.bin";
+		sound-name-prefix = "Amp0";
+		awinic,audio-channel = <0>;
+	};
+
+	spk_amp2: audio-codec@35 {
+		compatible = "awinic,aw88261";
+		reg = <0x35>;
+		#sound-dai-cells = <0>;
+		dvdd-supply = <&spk_amp_dvdd>;
+		firmware-name = "awinic/erhai/aw88261_acf.bin";
+		sound-name-prefix = "Amp2";
+		awinic,audio-channel = <2>;
+	};
+
+	spk_amp6: audio-codec@36 {
+		compatible = "awinic,aw88261";
+		reg = <0x36>;
+		#sound-dai-cells = <0>;
+		dvdd-supply = <&spk_amp_dvdd>;
+		firmware-name = "awinic/erhai/aw88261_acf.bin";
+		sound-name-prefix = "Amp6";
+		awinic,audio-channel = <6>;
+	};
 };
 
 &mdss {
