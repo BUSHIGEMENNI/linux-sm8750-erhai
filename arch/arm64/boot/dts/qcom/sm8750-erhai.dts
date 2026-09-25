@@ -7,6 +7,7 @@
 
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/leds/common.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
 #include "sm8750.dtsi"
 #include "pm8550.dtsi"
@@ -23,6 +24,17 @@
 
 	aliases {
 		serial0 = &uart7;
+	};
+
+	/*
+	 * Both KTZ8868 chips light the one panel and always get the same
+	 * brightness value. The initial level is the stock default brightness
+	 * level 913 mapped through the stock kernel's backlight table.
+	 */
+	panel_backlight: backlight {
+		compatible = "led-backlight";
+		leds = <&ktz8868_master_led>, <&ktz8868_slave_led>;
+		default-brightness-level = <1433>;
 	};
 
 	sound {
@@ -754,8 +766,13 @@
 	ktz8868_slave: backlight@11 {
 		compatible = "kinetic,ktz8868";
 		reg = <0x11>;
-		label = "ktz8868-slave";
-		default-brightness = <913>;
+
+		ktz8868_slave_led: led {
+			function = LED_FUNCTION_BACKLIGHT;
+			function-enumerator = <2>;
+			color = <LED_COLOR_ID_WHITE>;
+			led-sources = <0 1 2 4 5>;
+		};
 	};
 };
 
@@ -769,7 +786,6 @@
 	ktz8868_master: backlight@11 {
 		compatible = "kinetic,ktz8868";
 		reg = <0x11>;
-		label = "ktz8868-master";
 
 		/* HWEN, ENP, ENN */
 		enable-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>,
@@ -777,7 +793,13 @@
 			       <&tlmm 14 GPIO_ACTIVE_HIGH>;
 
 		kinetic,enable-lcd-bias;
-		default-brightness = <913>;
+
+		ktz8868_master_led: led {
+			function = LED_FUNCTION_BACKLIGHT;
+			function-enumerator = <1>;
+			color = <LED_COLOR_ID_WHITE>;
+			led-sources = <0 1 2 4 5>;
+		};
 	};
 };
 
@@ -817,7 +839,7 @@
 		pinctrl-names = "default";
 		vddio-supply = <&vreg_l12b_1p8>;
 
-		backlight = <&ktz8868_master>;
+		backlight = <&panel_backlight>;
 
 		ports {
 			#address-cells = <1>;
