@@ -5,7 +5,6 @@
 
 # Each configuration option enables a list of files.
 
-obj-$(CONFIG_KEYBOARD_ONEPLUS_POGO)	+= oneplus-pogo-keyboard.o
 obj-$(CONFIG_KEYBOARD_ADC)		+= adc-keys.o
 obj-$(CONFIG_KEYBOARD_ADP5520)		+= adp5520-keys.o
 obj-$(CONFIG_KEYBOARD_ADP5585)		+= adp5585-keys.o
