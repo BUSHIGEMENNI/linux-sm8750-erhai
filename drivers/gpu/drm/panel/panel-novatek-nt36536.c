@@ -218,15 +218,22 @@ static int novatek_nt36536_prepare(struct drm_panel *panel)
 	 * would be re-initialising a panel that never lost its configuration.
 	 *
 	 * That would be wasted work if the link could carry it, and it cannot:
-	 * on this SoC the DSI command DMA completes on the first enable of a
-	 * boot and hangs on every enable after it.  STATUS0.CMD_MODE_DMA_BUSY
-	 * stays set on both links of the bonded pair while every control and
-	 * PHY register reads back identical to the enable that worked, in LP
-	 * and in HS alike, with the display power domain held up or allowed to
-	 * collapse.  The first DCS write of the second prepare times out, the
-	 * 122-command init sequence is abandoned, and the backlight comes back
-	 * on in front of a panel that is no longer initialised: the screen is
-	 * black until the next reboot.
+	 * the DSI command DMA works any number of times while the link stays
+	 * powered (the off commands of a blank go out fine), but the first
+	 * command after the DSI hosts were powered down and the MDSS power
+	 * domain collapsed hangs.  STATUS0.CMD_MODE_DMA_BUSY stays set on both
+	 * links of the bonded pair, the lanes sit in stop state and the FIFOs
+	 * are empty: nothing was fetched.  The first DCS write of the second
+	 * prepare times out, the 122-command init sequence is abandoned, and
+	 * the backlight comes back on in front of a panel that is no longer
+	 * initialised: the screen is black until the next reboot.
+	 *
+	 * Every clean failure had the MDSS power domain collapsed between the
+	 * two enables.  An earlier version of this comment also claimed the
+	 * hang with that domain held up, and in HS as well as LP; those runs
+	 * were taken after the link had already hung once in the same boot, so
+	 * they show nothing either way.  Whether a real re-initialisation
+	 * survives a blank with MDSS kept powered is still an open question.
 	 *
 	 * So initialise once and then leave the panel alone.  This belongs to
 	 * this board and not to the panel: a panel that really loses power has
