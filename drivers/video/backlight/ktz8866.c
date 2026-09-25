@@ -10,6 +10,7 @@
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/leds.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/property.h>
@@ -17,6 +18,7 @@
 
 #define DEFAULT_BRIGHTNESS 1500
 #define MAX_BRIGHTNESS 2047
+#define NUM_SINKS 6
 #define REG_MAX 0x15
 
 /* reg */
@@ -74,6 +76,9 @@ struct ktz8866 {
 	bool led_on;
 	struct gpio_descs *enable_gpios;
 	enum ktz8866_variant variant;
+	struct backlight_device *backlight;
+	struct led_classdev led;
+	unsigned int bl_en;
 };
 
 static const struct regmap_config ktz8866_regmap_config = {
@@ -100,8 +105,8 @@ static void ktz8866_set_brightness(struct ktz8866 *ktz, unsigned int brightness)
 	ktz8866_write(ktz, BL_BRT_MSB, (brightness >> 3) & 0xFF);
 }
 
-static int ktz8868_backlight_update_status(struct ktz8866 *ktz,
-					   unsigned int brightness)
+static int ktz8868_update_brightness(struct ktz8866 *ktz,
+				     unsigned int brightness)
 {
 	if (brightness == 0) {
 		if (ktz->led_on) {
@@ -121,7 +126,7 @@ static int ktz8868_backlight_update_status(struct ktz8866 *ktz,
 		ktz8866_write(ktz, BL_CFG2, KTZ8868_BL_CFG2_VAL);
 		ktz8866_write(ktz, BL_OPTION2, KTZ8868_BL_OPTION2_VAL);
 		ktz8866_write(ktz, PWM_RAMP_TIME, KTZ8868_PWM_RAMP_TIME_VAL);
-		ktz8866_write(ktz, BL_EN, KTZ8868_BL_EN_VAL);
+		ktz8866_write(ktz, BL_EN, ktz->bl_en);
 	}
 
 	ktz8866_set_brightness(ktz, brightness);
@@ -141,7 +146,7 @@ static int ktz8866_backlight_update_status(struct backlight_device *backlight_de
 	unsigned int brightness = backlight_get_brightness(backlight_dev);
 
 	if (ktz->variant == KTZ8868)
-		return ktz8868_backlight_update_status(ktz, brightness);
+		return ktz8868_update_brightness(ktz, brightness);
 
 	if (!ktz->led_on && brightness > 0) {
 		ktz8866_update_bits(ktz, BL_EN, BL_EN_BIT, BL_EN_BIT);
@@ -160,6 +165,55 @@ static const struct backlight_ops ktz8866_backlight_ops = {
 	.options = BL_CORE_SUSPENDRESUME,
 	.update_status = ktz8866_backlight_update_status,
 };
+
+static int ktz8868_led_brightness_set(struct led_classdev *led,
+				      enum led_brightness brightness)
+{
+	struct ktz8866 *ktz = container_of(led, struct ktz8866, led);
+
+	return ktz8868_update_brightness(ktz, brightness);
+}
+
+/*
+ * A KTZ8868 with a led child node exposes its LED string as an LED class
+ * device, so that several chips lighting one panel can be combined into a
+ * single backlight by led-backlight. led-sources selects the current sinks.
+ */
+static int ktz8868_register_led(struct ktz8866 *ktz,
+				struct fwnode_handle *child)
+{
+	struct device *dev = &ktz->client->dev;
+	struct led_init_data init_data = { .fwnode = child };
+	u32 sources[NUM_SINKS];
+	int count, i, ret;
+
+	count = fwnode_property_count_u32(child, "led-sources");
+	if (count < 1 || count > NUM_SINKS)
+		return dev_err_probe(dev, -EINVAL, "invalid led-sources\n");
+
+	ret = fwnode_property_read_u32_array(child, "led-sources", sources,
+					     count);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to read led-sources\n");
+
+	ktz->bl_en = BL_EN_BIT;
+	for (i = 0; i < count; i++) {
+		if (sources[i] >= NUM_SINKS)
+			return dev_err_probe(dev, -EINVAL,
+					     "invalid LED sink %u\n", sources[i]);
+		ktz->bl_en |= BIT(sources[i]);
+	}
+
+	ktz->led.max_brightness = MAX_BRIGHTNESS;
+	ktz->led.brightness_set_blocking = ktz8868_led_brightness_set;
+	ktz->led.flags = LED_CORE_SUSPENDRESUME;
+
+	ret = devm_led_classdev_register_ext(dev, &ktz->led, &init_data);
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to register LED\n");
+
+	return 0;
+}
 
 static void ktz8866_init(struct ktz8866 *ktz)
 {
@@ -238,6 +292,7 @@ static int ktz8868_power_up(struct ktz8866 *ktz)
 
 static int ktz8866_probe(struct i2c_client *client)
 {
+	struct fwnode_handle *led_node __free(fwnode_handle) = NULL;
 	struct backlight_device *backlight_dev;
 	struct backlight_properties props;
 	struct ktz8866 *ktz;
@@ -267,10 +322,18 @@ static int ktz8866_probe(struct i2c_client *client)
 		return PTR_ERR(ktz->enable_gpios);
 
 	if (ktz->variant == KTZ8868) {
+		ktz->bl_en = KTZ8868_BL_EN_VAL;
+		led_node = device_get_named_child_node(&client->dev, "led");
+
 		ret = ktz8868_power_up(ktz);
 		if (ret)
 			return dev_err_probe(&client->dev, ret, "failed to power up\n");
 	}
+
+	i2c_set_clientdata(client, ktz);
+
+	if (led_node)
+		return ktz8868_register_led(ktz, led_node);
 
 	memset(&props, 0, sizeof(props));
 	props.type = BACKLIGHT_RAW;
@@ -293,7 +356,7 @@ static int ktz8866_probe(struct i2c_client *client)
 	if (ktz->variant == KTZ8866)
 		ktz8866_init(ktz);
 
-	i2c_set_clientdata(client, backlight_dev);
+	ktz->backlight = backlight_dev;
 	backlight_update_status(backlight_dev);
 
 	return 0;
@@ -301,9 +364,14 @@ static int ktz8866_probe(struct i2c_client *client)
 
 static void ktz8866_remove(struct i2c_client *client)
 {
-	struct backlight_device *backlight_dev = i2c_get_clientdata(client);
-	backlight_dev->props.brightness = 0;
-	backlight_update_status(backlight_dev);
+	struct ktz8866 *ktz = i2c_get_clientdata(client);
+
+	/* The LED core switches a registered LED off when it is unregistered. */
+	if (!ktz->backlight)
+		return;
+
+	ktz->backlight->props.brightness = 0;
+	backlight_update_status(ktz->backlight);
 }
 
 static const struct i2c_device_id ktz8866_ids[] = {
