@@ -554,15 +554,16 @@
 
 		vreg_l12b_1p8: ldo12 {
 			regulator-name = "vreg_l12b_1p8";
-			/* Panel/touch vddio; the stock display supply entry for this
+			/*
+			 * Panel/touch vddio; the stock display supply entry for this
 			 * board asks for 1.9V. The nldo515 8mV grid has no 1.9V step
 			 * (an unsatisfiable constraint fails the whole PMIC), so take
-			 * the step just below. Kept on so the panel sees vddio before
-			 * the KTZ8868 raises the LCD bias at backlight probe (stock
-			 * order: vddio, bias, reset). */
+			 * the step just below. The panel switches it together with
+			 * the LCD bias; the touch controller in the same die is only
+			 * used while the panel is prepared.
+			 */
 			regulator-min-microvolt = <1896000>;
 			regulator-max-microvolt = <1904000>;
-			regulator-always-on;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 			regulator-allow-set-load;
 			regulator-allowed-modes = <RPMH_REGULATOR_MODE_LPM
@@ -935,10 +936,7 @@
 		compatible = "kinetic,ktz8868";
 		reg = <0x11>;
 
-		/* HWEN, ENP, ENN */
-		enable-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>,
-			       <&tlmm 111 GPIO_ACTIVE_HIGH>,
-			       <&tlmm 14 GPIO_ACTIVE_HIGH>;
+		enable-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>;
 
 		kinetic,enable-lcd-bias;
 
@@ -947,6 +945,16 @@
 			function-enumerator = <1>;
 			color = <LED_COLOR_ID_WHITE>;
 			led-sources = <0 1 2 4 5>;
+		};
+
+		lcd_vsn: outn {
+			regulator-name = "lcd_vsn";
+			enable-gpios = <&tlmm 14 GPIO_ACTIVE_HIGH>;
+		};
+
+		lcd_vsp: outp {
+			regulator-name = "lcd_vsp";
+			enable-gpios = <&tlmm 111 GPIO_ACTIVE_HIGH>;
 		};
 	};
 };
@@ -1046,6 +1054,8 @@
 		pinctrl-0 = <&mdp_te_vsync>;
 		pinctrl-names = "default";
 		vddio-supply = <&vreg_l12b_1p8>;
+		vsn-supply = <&lcd_vsn>;
+		vsp-supply = <&lcd_vsp>;
 
 		backlight = <&panel_backlight>;
 
