@@ -14,8 +14,10 @@
 #include <linux/platform_device.h>
 #include <linux/regmap.h>
 #include <linux/rpmsg.h>
+#include <linux/sched/clock.h>
 #include <linux/sizes.h>
 #include <linux/slab.h>
+#include <linux/syscore_ops.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
 #include <linux/mailbox_client.h>
@@ -31,6 +33,19 @@
 
 #define RPM_GLINK_CID_MIN	1
 #define RPM_GLINK_CID_MAX	65536
+
+/*
+ * TEMP: wake trace for the deep suspend bring-up.  Off by default; to be
+ * reverted once the source of the early wake-ups has been identified.
+ */
+static bool temp_wake_trace;
+module_param(temp_wake_trace, bool, 0444);
+MODULE_PARM_DESC(temp_wake_trace,
+		 "TEMP: log the first message per edge after system resume (default: off)");
+
+#define GLINK_WAKE_ANY		BIT(0)
+#define GLINK_WAKE_DATA		BIT(1)
+#define GLINK_WAKE_PEEK		16
 
 struct glink_msg {
 	/* New members MUST be added within the __struct_group() macro below. */
@@ -101,6 +116,9 @@ struct glink_core_rx_intent {
  * @tx_avail_notify: Waitqueue for pending tx tasks
  * @sent_read_notify: flag to check cmd sent or not
  * @abort_tx:	flag indicating that all tx attempts should fail
+ * @temp_wake_syscore: TEMP wake trace, registered if temp_wake_trace is set
+ * @temp_wake_armed: TEMP wake trace, GLINK_WAKE_* still to be logged
+ * @temp_wake_ts: TEMP wake trace, local_clock() at the last syscore resume
  */
 struct qcom_glink {
 	struct device *dev;
@@ -126,6 +144,10 @@ struct qcom_glink {
 	bool sent_read_notify;
 
 	bool abort_tx;
+
+	struct syscore temp_wake_syscore;
+	atomic_t temp_wake_armed;
+	u64 temp_wake_ts;
 };
 
 enum {
@@ -1169,6 +1191,83 @@ static void qcom_glink_handle_signals(struct qcom_glink *glink,
 		channel->ept.flow_cb(channel->ept.rpdev, channel->ept.priv, enable);
 }
 
+/* Called from the edge interrupt handler */
+static void qcom_glink_temp_wake_note(struct qcom_glink *glink,
+				      unsigned int cmd, unsigned int param1,
+				      unsigned int param2, unsigned int avail)
+{
+	struct {
+		struct glink_msg_hdr msg;
+		__le32 chunk_size;
+		__le32 left_size;
+	} __packed hdr;
+	struct glink_channel *channel;
+	u8 data[GLINK_WAKE_PEEK] = {};
+	char name[GLINK_NAME_SIZE];
+	unsigned int chunk_size = 0;
+	unsigned int len = 0;
+	unsigned long flags;
+	u64 delta;
+
+	delta = local_clock() - READ_ONCE(glink->temp_wake_ts);
+
+	if (atomic_fetch_andnot(GLINK_WAKE_ANY, &glink->temp_wake_armed) &
+	    GLINK_WAKE_ANY)
+		dev_info(glink->dev,
+			 "TEMP wake: edge=%s first cmd=%u param1=%u param2=%#x after_us=%llu\n",
+			 glink->label, cmd, param1, param2,
+			 div_u64(delta, NSEC_PER_USEC));
+
+	if (cmd != GLINK_CMD_TX_DATA ||
+	    !(atomic_fetch_andnot(GLINK_WAKE_DATA, &glink->temp_wake_armed) &
+	      GLINK_WAKE_DATA))
+		return;
+
+	strscpy(name, "unknown");
+	spin_lock_irqsave(&glink->idr_lock, flags);
+	channel = idr_find(&glink->rcids, param1);
+	if (channel)
+		strscpy(name, channel->name);
+	spin_unlock_irqrestore(&glink->idr_lock, flags);
+
+	if (avail >= sizeof(hdr)) {
+		qcom_glink_rx_peek(glink, &hdr, 0, sizeof(hdr));
+		chunk_size = le32_to_cpu(hdr.chunk_size);
+		len = min3(chunk_size, avail - (unsigned int)sizeof(hdr),
+			   (unsigned int)sizeof(data));
+		if (len)
+			qcom_glink_rx_peek(glink, data, sizeof(hdr), len);
+	}
+
+	dev_info(glink->dev,
+		 "TEMP wake: edge=%s first data channel=%s rcid=%u size=%u head=%*ph after_us=%llu\n",
+		 glink->label, name, param1, chunk_size, len, data,
+		 div_u64(delta, NSEC_PER_USEC));
+}
+
+static int qcom_glink_temp_wake_suspend(void *data)
+{
+	struct qcom_glink *glink = data;
+
+	atomic_set(&glink->temp_wake_armed, 0);
+
+	return 0;
+}
+
+static void qcom_glink_temp_wake_resume(void *data)
+{
+	struct qcom_glink *glink = data;
+
+	WRITE_ONCE(glink->temp_wake_ts, local_clock());
+	atomic_set_release(&glink->temp_wake_armed,
+			   GLINK_WAKE_ANY | GLINK_WAKE_DATA);
+}
+
+static const struct syscore_ops qcom_glink_temp_wake_ops = {
+	.suspend = qcom_glink_temp_wake_suspend,
+	.resume = qcom_glink_temp_wake_resume,
+};
+
 void qcom_glink_native_rx(struct qcom_glink *glink)
 {
 	struct glink_msg msg;
@@ -1191,6 +1290,10 @@ void qcom_glink_native_rx(struct qcom_glink *glink)
 		cmd = le16_to_cpu(msg.cmd);
 		param1 = le16_to_cpu(msg.param1);
 		param2 = le32_to_cpu(msg.param2);
+
+		if (unlikely(atomic_read_acquire(&glink->temp_wake_armed)))
+			qcom_glink_temp_wake_note(glink, cmd, param1, param2,
+						  avail);
 
 		switch (cmd) {
 		case GLINK_CMD_VERSION:
@@ -1936,6 +2039,14 @@ struct qcom_glink *qcom_glink_native_probe(struct device *dev,
 	if (ret)
 		dev_err(glink->dev, "failed to register chrdev\n");
 
+	if (temp_wake_trace) {
+		glink->temp_wake_syscore.ops = &qcom_glink_temp_wake_ops;
+		glink->temp_wake_syscore.data = glink;
+		register_syscore(&glink->temp_wake_syscore);
+		dev_info(glink->dev, "TEMP wake trace enabled for edge %s\n",
+			 glink->label);
+	}
+
 	return glink;
 }
 EXPORT_SYMBOL_GPL(qcom_glink_native_probe);
@@ -1953,6 +2064,9 @@ void qcom_glink_native_remove(struct qcom_glink *glink)
 	unsigned long flags;
 	int cid;
 	int ret;
+
+	if (glink->temp_wake_syscore.ops)
+		unregister_syscore(&glink->temp_wake_syscore);
 
 	qcom_glink_cancel_rx_work(glink);
 
