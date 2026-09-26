@@ -1229,13 +1229,9 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 
-	/*
-	 * The PRM clock driver exposes no secondary TDM bit clock. Use the
-	 * secondary MI2S bit clock, inferred to drive the same interface.
-	 */
 	dai@28 {
 		reg = <SECONDARY_TDM_RX_0>;
-		clocks = <&q6prmcc LPASS_CLK_ID_SEC_MI2S_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
+		clocks = <&q6prmcc LPASS_CLK_ID_SEC_TDM_IBIT LPASS_CLK_ATTRIBUTE_COUPLE_NO>;
 		clock-names = "bclk";
 	};
 };
