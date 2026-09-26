@@ -35,19 +35,6 @@ static bool temp_keep_clocks_on_suspend;
 __module_param_call("msm_mdss.", temp_keep_clocks_on_suspend, &param_ops_bool,
 		    &temp_keep_clocks_on_suspend, 0444, -1, 0);
 
-/*
- * TEMP(erhai D31/D35 E3c): reset the whole subsystem through its BCR on every
- * runtime resume, the way the probe does once, and have the DPU check what it
- * otherwise sets up only once (dpu_kms.c), to test whether a subsystem that
- * starts from its reset state after each collapse recovers where one that
- * starts from whatever the collapse left does not.  Only the kernel command
- * line sets it (the driver is built in):
- * msm_mdss.temp_bcr_reset_on_resume=1.  Remove once E3 is judged.
- */
-bool msm_mdss_temp_bcr_reset_on_resume;
-__module_param_call("msm_mdss.", temp_bcr_reset_on_resume, &param_ops_bool,
-		    &msm_mdss_temp_bcr_reset_on_resume, 0444, -1, 0);
-
 struct msm_mdss_data {
 	u32 reg_bus_bw;
 };
@@ -480,18 +467,6 @@ static int __maybe_unused mdss_runtime_resume(struct device *dev)
 	if (mdss->temp_clocks_kept) {
 		mdss->temp_clocks_kept = false;
 		msm_mdss_disable(mdss);
-	}
-
-	/*
-	 * TEMP(erhai E3c): the same reset, in the same place relative to the
-	 * clock enable, as msm_mdss_init() does at probe.
-	 */
-	if (msm_mdss_temp_bcr_reset_on_resume) {
-		int ret = msm_mdss_reset(dev);
-
-		if (ret)
-			return ret;
-		dev_info(dev, "TEMP E3c: MDSS reset through its BCR on runtime resume\n");
 	}
 
 	return msm_mdss_enable(mdss);

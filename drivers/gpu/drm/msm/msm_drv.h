@@ -428,12 +428,9 @@ static inline void msm_dpu_unregister(void) {}
 #ifdef CONFIG_DRM_MSM_MDSS
 void msm_mdss_register(void);
 void msm_mdss_unregister(void);
-/* TEMP(erhai D31/D35 E3c): see msm_mdss.c */
-extern bool msm_mdss_temp_bcr_reset_on_resume;
 #else
 static inline void msm_mdss_register(void) {}
 static inline void msm_mdss_unregister(void) {}
-#define msm_mdss_temp_bcr_reset_on_resume false
 #endif
 
 #ifdef CONFIG_DEBUG_FS

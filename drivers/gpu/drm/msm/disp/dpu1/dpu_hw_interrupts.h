@@ -72,7 +72,4 @@ struct dpu_hw_intr *dpu_hw_intr_init(struct drm_device *dev,
 				     void __iomem *addr,
 				     const struct dpu_mdss_cfg *m);
 
-/* TEMP(erhai D31/D35 E3c) */
-void dpu_hw_intr_temp_restore(struct dpu_hw_intr *intr);
-
 #endif
