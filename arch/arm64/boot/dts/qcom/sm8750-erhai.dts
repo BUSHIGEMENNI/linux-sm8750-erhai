@@ -68,7 +68,8 @@
 		/*
 		 * Secondary TDM at 48 kHz: eight 32-bit slots, DSP_B framing,
 		 * clocks from the SoC. Each amplifier takes the slot equal to
-		 * its stock channel index.
+		 * its stock channel index and latches data on the inverted bit
+		 * clock edge, as the stock amplifier configuration does.
 		 */
 		speaker-playback-dai-link {
 			link-name = "Speaker Playback";
@@ -88,36 +89,42 @@
 				sound-dai = <&spk_amp0>;
 				dai-tdm-slot-tx-mask = <1>;
 				dai-tdm-slot-rx-mask = <1>;
+				bitclock-inversion;
 			};
 
 			codec-1 {
 				sound-dai = <&spk_amp1>;
 				dai-tdm-slot-tx-mask = <0 1>;
 				dai-tdm-slot-rx-mask = <0 1>;
+				bitclock-inversion;
 			};
 
 			codec-2 {
 				sound-dai = <&spk_amp2>;
 				dai-tdm-slot-tx-mask = <0 0 1>;
 				dai-tdm-slot-rx-mask = <0 0 1>;
+				bitclock-inversion;
 			};
 
 			codec-3 {
 				sound-dai = <&spk_amp3>;
 				dai-tdm-slot-tx-mask = <0 0 0 1>;
 				dai-tdm-slot-rx-mask = <0 0 0 1>;
+				bitclock-inversion;
 			};
 
 			codec-5 {
 				sound-dai = <&spk_amp5>;
 				dai-tdm-slot-tx-mask = <0 0 0 0 0 1>;
 				dai-tdm-slot-rx-mask = <0 0 0 0 0 1>;
+				bitclock-inversion;
 			};
 
 			codec-6 {
 				sound-dai = <&spk_amp6>;
 				dai-tdm-slot-tx-mask = <0 0 0 0 0 0 1>;
 				dai-tdm-slot-rx-mask = <0 0 0 0 0 0 1>;
+				bitclock-inversion;
 			};
 
 			platform {
