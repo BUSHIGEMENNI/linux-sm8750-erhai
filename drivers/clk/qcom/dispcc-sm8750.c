@@ -49,22 +49,6 @@ enum {
 
 #define DISP_CC_MISC_CMD	0xF000
 
-/*
- * TEMP(erhai D31/D35 E3b): let the MDSS GDSC collapse without flop retention,
- * to test whether the state the MDP and DSI blocks come back with after a
- * collapse is a retained one the drivers do not expect.  RETAIN_FF_ENABLE is
- * GDSCR bit 11, which a boot loader that left the display on may already
- * have set, and gdsc_init() only ever sets it: dropping the flag alone could
- * change nothing, so the bit is cleared too.  Only the kernel command line
- * sets it (the driver is built in):
- * dispcc_sm8750.temp_gdsc_no_retain=1.  Remove once E3 is judged.
- */
-#define TEMP_GDSC_RETAIN_FF_ENABLE	BIT(11)
-static bool temp_gdsc_no_retain;
-module_param(temp_gdsc_no_retain, bool, 0444);
-MODULE_PARM_DESC(temp_gdsc_no_retain,
-		 "TEMP: collapse the MDSS GDSC without flop retention (D31/D35 E3b)");
-
 enum {
 	P_BI_TCXO,
 	P_DISP_CC_PLL0_OUT_MAIN,
@@ -1779,19 +1763,6 @@ static struct gdsc mdss_gdsc = {
 	.flags = POLL_CFG_GDSCR | HW_CTRL | RETAIN_FF_ENABLE,
 };
 
-/* TEMP(erhai E3b): mdss_gdsc as above, without RETAIN_FF_ENABLE */
-static struct gdsc temp_mdss_gdsc_no_retain = {
-	.gdscr = 0x9000,
-	.en_rest_wait_val = 0x2,
-	.en_few_wait_val = 0x2,
-	.clk_dis_wait_val = 0xf,
-	.pd = {
-		.name = "mdss_gdsc",
-	},
-	.pwrsts = PWRSTS_OFF_ON,
-	.flags = POLL_CFG_GDSCR | HW_CTRL,
-};
-
 static struct gdsc mdss_int2_gdsc = {
 	.gdscr = 0xb000,
 	.en_rest_wait_val = 0x2,
@@ -1955,17 +1926,6 @@ static int disp_cc_sm8750_probe(struct platform_device *pdev)
 
 	/* Enable clock gating for MDP clocks */
 	regmap_update_bits(regmap, DISP_CC_MISC_CMD, 0x10, 0x10);
-
-	if (temp_gdsc_no_retain) {
-		u32 gdscr = 0;
-
-		disp_cc_sm8750_gdscs[MDSS_GDSC] = &temp_mdss_gdsc_no_retain;
-		regmap_update_bits(regmap, temp_mdss_gdsc_no_retain.gdscr,
-				   TEMP_GDSC_RETAIN_FF_ENABLE, 0);
-		regmap_read(regmap, temp_mdss_gdsc_no_retain.gdscr, &gdscr);
-		dev_info(&pdev->dev, "TEMP E3b: mdss_gdsc without flop retention, GDSCR %#010x\n",
-			 gdscr);
-	}
 
 	/* Keep some clocks always-on */
 	qcom_branch_set_clk_en(regmap, 0xe07c); /* DISP_CC_SLEEP_CLK */
