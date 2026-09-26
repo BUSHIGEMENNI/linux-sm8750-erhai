@@ -1131,6 +1131,11 @@
 	};
 };
 
+&pm8550_temp_alarm {
+	io-channels = <&pmk8550_adc 0x103>;
+	io-channel-names = "thermal";
+};
+
 &pmih0108_eusb2_repeater {
 	qcom,tune-usb2-preem = /bits/ 8 <0x3>;
 	qcom,tune-usb2-amplitude = /bits/ 8 <0xb>;
