@@ -1484,6 +1484,54 @@ static int __maybe_unused dpu_runtime_suspend(struct device *dev)
 	return 0;
 }
 
+/*
+ * TEMP(erhai D31/D35 E3c): with msm_mdss.temp_bcr_reset_on_resume set, the
+ * whole subsystem has just been reset through its BCR.  The INTF timing and
+ * the CTL paths are programmed again by the next encoder enable, as after any
+ * collapse; what the DPU otherwise does only once is the interrupt setup.
+ * Restore the interrupt enables from the driver's cache (a reset clears them,
+ * the cache would keep them from being written again), clear a CTL soft reset
+ * that is still pending, and log what the INTF timing engines read, which a
+ * reset that reached the MDP leaves off.
+ */
+#define TEMP_CTL_SW_RESET	0x030
+
+static void dpu_kms_temp_reinit_after_reset(struct dpu_kms *dpu_kms)
+{
+	u32 pending = 0, stuck = 0, timing = 0;
+	int i;
+
+	if (dpu_kms->hw_intr)
+		dpu_hw_intr_temp_restore(dpu_kms->hw_intr);
+
+	for (i = 0; i < ARRAY_SIZE(dpu_kms->rm.ctl_blks); i++) {
+		struct dpu_hw_ctl *ctl;
+
+		if (!dpu_kms->rm.ctl_blks[i])
+			continue;
+		ctl = to_dpu_hw_ctl(dpu_kms->rm.ctl_blks[i]);
+		if (!(DPU_REG_READ(&ctl->hw, TEMP_CTL_SW_RESET) & BIT(0)))
+			continue;
+		pending |= BIT(i);
+		if (ctl->ops.wait_reset_status && ctl->ops.wait_reset_status(ctl))
+			stuck |= BIT(i);
+	}
+
+	for (i = 0; i < ARRAY_SIZE(dpu_kms->rm.hw_intf); i++) {
+		struct dpu_hw_intf *intf = dpu_kms->rm.hw_intf[i];
+		struct dpu_hw_intf_status status = {};
+
+		if (!intf || !intf->ops.get_status)
+			continue;
+		intf->ops.get_status(intf, &status);
+		if (status.is_en)
+			timing |= BIT(i);
+	}
+
+	DRM_INFO("TEMP E3c: DPU reinit: ctl reset pending %#x stuck %#x, intf timing %#x\n",
+		 pending, stuck, timing);
+}
+
 static int __maybe_unused dpu_runtime_resume(struct device *dev)
 {
 	int rc = -1;
@@ -1502,6 +1550,9 @@ static int __maybe_unused dpu_runtime_resume(struct device *dev)
 	}
 
 	dpu_vbif_init_memtypes(dpu_kms);
+
+	if (msm_mdss_temp_bcr_reset_on_resume)
+		dpu_kms_temp_reinit_after_reset(dpu_kms);
 
 	drm_for_each_encoder(encoder, ddev)
 		dpu_encoder_virt_runtime_resume(encoder);

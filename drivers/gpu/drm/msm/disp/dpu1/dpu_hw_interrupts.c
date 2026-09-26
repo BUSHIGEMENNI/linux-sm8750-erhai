@@ -765,6 +765,27 @@ void dpu_debugfs_core_irq_init(struct dpu_kms *dpu_kms,
 }
 #endif
 
+/*
+ * TEMP(erhai D31/D35 E3c): after a subsystem reset the enable registers read
+ * 0 while the cache still holds what is registered, and an enable that the
+ * cache already has is never written again.  Clear the status and write the
+ * enables back from the cache.
+ */
+void dpu_hw_intr_temp_restore(struct dpu_hw_intr *intr)
+{
+	unsigned long irq_flags;
+	int i;
+
+	spin_lock_irqsave(&intr->irq_lock, irq_flags);
+	for (i = 0; i < MDP_INTR_MAX; i++) {
+		if (!test_bit(i, &intr->irq_mask))
+			continue;
+		DPU_REG_WRITE(&intr->hw, intr->intr_set[i].clr_off, 0xffffffff);
+		DPU_REG_WRITE(&intr->hw, intr->intr_set[i].en_off, intr->cache_irq_mask[i]);
+	}
+	spin_unlock_irqrestore(&intr->irq_lock, irq_flags);
+}
+
 /**
  * dpu_core_irq_preinstall - perform pre-installation of core IRQ handler
  * @kms:		MSM KMS handle
