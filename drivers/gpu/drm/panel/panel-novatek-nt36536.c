@@ -30,7 +30,6 @@ struct novatek_nt36536 {
 	struct gpio_desc *reset_gpio;
 	struct regulator *vddio;
 	struct dentry *dbg_dir;
-	bool initialised;
 };
 
 static inline struct novatek_nt36536 *to_novatek_nt36536(struct drm_panel *panel)
@@ -206,43 +205,6 @@ static int novatek_nt36536_prepare(struct drm_panel *panel)
 	if (ret < 0)
 		return ret;
 
-	/*
-	 * Board workaround: hold the panel in its initialised state instead of
-	 * bringing it up again.
-	 *
-	 * This panel cannot be powered down here.  vddio is
-	 * regulator-always-on and the KTZ8868 holds the bias rails up for as
-	 * long as its driver is bound, because the part needs vddio -> bias ->
-	 * reset in that order and nothing in this driver sequences the bias.
-	 * So an unprepare takes no power away, and the prepare that follows
-	 * would be re-initialising a panel that never lost its configuration.
-	 *
-	 * That would be wasted work if the link could carry it, and it cannot:
-	 * the DSI command DMA works any number of times while the link stays
-	 * powered (the off commands of a blank go out fine), but the first
-	 * command after the DSI hosts were powered down and the MDSS power
-	 * domain collapsed hangs.  STATUS0.CMD_MODE_DMA_BUSY stays set on both
-	 * links of the bonded pair, the lanes sit in stop state and the FIFOs
-	 * are empty: nothing was fetched.  The first DCS write of the second
-	 * prepare times out, the 122-command init sequence is abandoned, and
-	 * the backlight comes back on in front of a panel that is no longer
-	 * initialised: the screen is black until the next reboot.
-	 *
-	 * Every clean failure had the MDSS power domain collapsed between the
-	 * two enables.  An earlier version of this comment also claimed the
-	 * hang with that domain held up, and in HS as well as LP; those runs
-	 * were taken after the link had already hung once in the same boot, so
-	 * they show nothing either way.  Whether a real re-initialisation
-	 * survives a blank with MDSS kept powered is still an open question.
-	 *
-	 * So initialise once and then leave the panel alone.  This belongs to
-	 * this board and not to the panel: a panel that really loses power has
-	 * to be initialised again, so this has to go when either the supply
-	 * sequencing or the command DMA is fixed.
-	 */
-	if (ctx->initialised)
-		return 0;
-
 	usleep_range(2000, 3000);
 	novatek_nt36536_reset(ctx);
 
@@ -262,8 +224,6 @@ static int novatek_nt36536_prepare(struct drm_panel *panel)
 		goto err;
 	}
 
-	ctx->initialised = true;
-
 	return 0;
 
 err:
@@ -278,16 +238,6 @@ static int novatek_nt36536_unprepare(struct drm_panel *panel)
 	struct novatek_nt36536 *ctx = to_novatek_nt36536(panel);
 	struct device *dev = &ctx->dsi[0]->dev;
 	int ret;
-
-	/*
-	 * The other half of the workaround in prepare(): while the panel is
-	 * held initialised, do not sleep it.  Sleeping it here would mean
-	 * waking it there, and the wake is the DCS write that this link cannot
-	 * deliver a second time.  The rails stay up either way, so nothing is
-	 * saved by asking.
-	 */
-	if (ctx->initialised)
-		return 0;
 
 	ret = novatek_nt36536_off(ctx);
 	if (ret < 0)
