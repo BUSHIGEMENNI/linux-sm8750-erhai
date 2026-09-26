@@ -30,6 +30,12 @@ properties:
   vddio-supply:
     description: power supply for the IC I/O interface
 
+  vsn-supply:
+    description: negative LCD bias supply
+
+  vsp-supply:
+    description: positive LCD bias supply
+
   backlight: true
   ports: true
 
@@ -37,6 +43,8 @@ required:
   - compatible
   - reg
   - vddio-supply
+  - vsn-supply
+  - vsp-supply
   - reset-gpios
   - ports
 
@@ -55,6 +63,8 @@ examples:
             reg = <0>;
 
             vddio-supply = <&vreg_l12b_1p8>;
+            vsn-supply = <&lcd_vsn>;
+            vsp-supply = <&lcd_vsp>;
             reset-gpios = <&tlmm 98 GPIO_ACTIVE_LOW>;
             backlight = <&backlight>;
 
