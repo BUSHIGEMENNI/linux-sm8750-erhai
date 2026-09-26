@@ -308,26 +308,30 @@ audioreach_get_module_array(const struct snd_soc_tplg_private *private)
 static struct audioreach_module_priv_data *
 audioreach_get_module_priv_data(const struct snd_soc_tplg_private *private)
 {
-	int sz;
+	u32 priv_size = le32_to_cpu(private->size);
+	u32 sz, size;
 
-	for (sz = 0; sz < le32_to_cpu(private->size); ) {
+	for (sz = 0; priv_size - sz >= sizeof(struct snd_soc_tplg_vendor_array); sz += size) {
 		const struct snd_soc_tplg_vendor_array *mod_array;
+		struct audioreach_module_priv_data *pdata;
 
 		mod_array = (struct snd_soc_tplg_vendor_array *)((u8 *)private->array + sz);
-		if (le32_to_cpu(mod_array->type) == SND_SOC_AR_TPLG_MODULE_CFG_TYPE) {
-			struct audioreach_module_priv_data *pdata;
+		size = le32_to_cpu(mod_array->size);
+		if (size < sizeof(*mod_array) || size > priv_size - sz)
+			break;
 
-			pdata = kzalloc_flex(*pdata, data,
-					     le32_to_cpu(mod_array->size));
-			if (!pdata)
-				return ERR_PTR(-ENOMEM);
+		if (le32_to_cpu(mod_array->type) != SND_SOC_AR_TPLG_MODULE_CFG_TYPE)
+			continue;
 
-			memcpy(pdata, ((u8 *)private->data + sz), struct_size(pdata, data,
-						le32_to_cpu(mod_array->size)));
-			return pdata;
-		}
+		/* The size covers the header, as it does for every vendor array. */
+		if (size <= sizeof(*pdata))
+			return ERR_PTR(-EINVAL);
 
-		sz = sz + le32_to_cpu(mod_array->size);
+		pdata = kmemdup(mod_array, size, GFP_KERNEL);
+		if (!pdata)
+			return ERR_PTR(-ENOMEM);
+
+		return pdata;
 	}
 
 	return NULL;
@@ -611,6 +615,12 @@ static int audioreach_widget_load_module_common(struct snd_soc_component *compon
 		return mod ? PTR_ERR(mod) : -ENODEV;
 
 	mod->data = audioreach_get_module_priv_data(&tplg_w->priv);
+	if (IS_ERR(mod->data)) {
+		int ret = PTR_ERR(mod->data);
+
+		mod->data = NULL;
+		return ret;
+	}
 
 	dobj = &w->dobj;
 	dobj->private = mod;
