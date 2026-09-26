@@ -11,6 +11,7 @@
 
 #include <linux/debugfs.h>
 #include <linux/dma-buf.h>
+#include <linux/iopoll.h>
 #include <linux/of_irq.h>
 #include <linux/pm_opp.h>
 
@@ -1469,12 +1470,83 @@ static void dpu_dev_remove(struct platform_device *pdev)
 	component_master_del(&pdev->dev, &msm_drm_ops);
 }
 
+/*
+ * TEMP(erhai D31/D35 E3d): halt the VBIF AXI port before the DPU lets its
+ * clocks go, the way the downstream driver does on every pre-disable event
+ * before the MDSS power collapse (sde_vbif_axi_halt_request()), which the
+ * upstream driver never does.  After a collapse the first DSI command DMA
+ * never fetches its data, so an AXI port that went into the collapse
+ * un-halted is a candidate, even though how the DSI fetch reaches the bus
+ * inside MDSS is not documented.  The halt is released on resume, in case
+ * the domain did not collapse or kept it.  Only the kernel command line sets it
+ * (the driver is built in): msm.temp_vbif_axi_halt=1.  Remove once E3 is
+ * judged.
+ */
+#define TEMP_VBIF_CLKON			0x0004
+#define TEMP_VBIF_AXI_HALT_CTRL0	0x0208
+#define TEMP_VBIF_AXI_HALT_CTRL1	0x020c
+
+static bool temp_vbif_axi_halt;
+module_param(temp_vbif_axi_halt, bool, 0444);
+MODULE_PARM_DESC(temp_vbif_axi_halt,
+		 "TEMP: halt the VBIF AXI port before runtime suspend (D31/D35 E3d)");
+
+static bool temp_vbif_halted;
+static u32 temp_vbif_clkon;
+
+static void dpu_kms_temp_vbif_axi_halt(struct dpu_kms *dpu_kms)
+{
+	struct dpu_hw_blk_reg_map *c;
+	u32 ack = 0;
+	int ret;
+
+	if (!dpu_kms->hw_vbif)
+		return;
+	c = &dpu_kms->hw_vbif->hw;
+
+	temp_vbif_clkon = DPU_REG_READ(c, TEMP_VBIF_CLKON);
+	DPU_REG_WRITE(c, TEMP_VBIF_CLKON, temp_vbif_clkon | BIT(0));
+	DPU_REG_WRITE(c, TEMP_VBIF_AXI_HALT_CTRL0, BIT(0));
+	wmb(); /* the halt request must reach the VBIF before polling for it */
+	temp_vbif_halted = true;
+
+	ret = readl_poll_timeout(c->blk_addr + TEMP_VBIF_AXI_HALT_CTRL1, ack,
+				 ack & BIT(0), 100, 4000);
+	/* as downstream: an idle AXI port 0 or 1 also counts as halted */
+	if (ret && (ack & (BIT(4) | BIT(5))))
+		ret = 0;
+	DRM_INFO("TEMP E3d: VBIF AXI halt before suspend: ack %#x clkon %#x (%d)\n",
+		 ack, temp_vbif_clkon, ret);
+}
+
+static void dpu_kms_temp_vbif_axi_release(struct dpu_kms *dpu_kms)
+{
+	struct dpu_hw_blk_reg_map *c;
+	u32 halt, ack, clkon;
+
+	if (!dpu_kms->hw_vbif || !temp_vbif_halted)
+		return;
+	c = &dpu_kms->hw_vbif->hw;
+
+	halt = DPU_REG_READ(c, TEMP_VBIF_AXI_HALT_CTRL0);
+	ack = DPU_REG_READ(c, TEMP_VBIF_AXI_HALT_CTRL1);
+	clkon = DPU_REG_READ(c, TEMP_VBIF_CLKON);
+	DPU_REG_WRITE(c, TEMP_VBIF_AXI_HALT_CTRL0, 0);
+	DPU_REG_WRITE(c, TEMP_VBIF_CLKON, temp_vbif_clkon);
+	temp_vbif_halted = false;
+	DRM_INFO("TEMP E3d: VBIF on resume: halt %#x ack %#x clkon %#x, released\n",
+		 halt, ack, clkon);
+}
+
 static int __maybe_unused dpu_runtime_suspend(struct device *dev)
 {
 	int i;
 	struct platform_device *pdev = to_platform_device(dev);
 	struct msm_drm_private *priv = platform_get_drvdata(pdev);
 	struct dpu_kms *dpu_kms = to_dpu_kms(priv->kms);
+
+	if (temp_vbif_axi_halt)
+		dpu_kms_temp_vbif_axi_halt(dpu_kms);
 
 	clk_bulk_disable_unprepare(dpu_kms->num_clocks, dpu_kms->clocks);
 
@@ -1548,6 +1620,8 @@ static int __maybe_unused dpu_runtime_resume(struct device *dev)
 		DPU_ERROR("clock enable failed rc:%d\n", rc);
 		return rc;
 	}
+
+	dpu_kms_temp_vbif_axi_release(dpu_kms);
 
 	dpu_vbif_init_memtypes(dpu_kms);
 
