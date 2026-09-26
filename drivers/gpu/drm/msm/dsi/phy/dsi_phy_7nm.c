@@ -10,10 +10,6 @@
 #include <linux/iopoll.h>
 
 #include "dsi_phy.h"
-
-/* TEMP(erhai): full PHY dump switch (TECH-DEBT D19), drop before erhai/main. */
-static int temp_phy_blockdump;
-module_param_named(temp_phy_blockdump, temp_phy_blockdump, int, 0644);
 #include "dsi.xml.h"
 #include "dsi_phy_7nm.xml.h"
 
@@ -1181,61 +1177,6 @@ static int dsi_7nm_phy_enable(struct msm_dsi_phy *phy,
 
 	/* DSI lane settings */
 	dsi_phy_hw_v4_0_lane_settings(phy);
-
-	/* TEMP(erhai): the panel never acks any DSI command.  Confirm the PHY is
-	 * actually up: read the REFGEN-ready status + lane config back.  The
-	 * common block goes with it, so the first enable and every later one
-	 * can be diffed register by register (TECH-DEBT D19). */
-	/* TEMP(erhai): and the whole PHY -- common, lane and PLL blocks -- so
-	 * the enable that works and the one that does not can be diffed word by
-	 * word.  The driver's own registers come back identical, so what
-	 * differs has to be in a block it does not reprogram. */
-	if (temp_phy_blockdump) {
-		const struct { void __iomem *base; size_t size; const char *what; } blocks[] = {
-			{ phy->base, phy->base_size, "cmn" },
-			{ phy->lane_base, phy->lane_size, "lane" },
-			{ phy->pll_base, phy->pll_size, "pll" },
-		};
-		unsigned int block, offset;
-
-		for (block = 0; block < ARRAY_SIZE(blocks); block++) {
-			if (!blocks[block].base)
-				continue;
-			for (offset = 0; offset < blocks[block].size; offset += 0x20)
-				DRM_INFO("TEMP phyblock %d %s +%03x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
-					 phy->id, blocks[block].what, offset,
-					 readl(blocks[block].base + offset + 0x00),
-					 readl(blocks[block].base + offset + 0x04),
-					 readl(blocks[block].base + offset + 0x08),
-					 readl(blocks[block].base + offset + 0x0c),
-					 readl(blocks[block].base + offset + 0x10),
-					 readl(blocks[block].base + offset + 0x14),
-					 readl(blocks[block].base + offset + 0x18),
-					 readl(blocks[block].base + offset + 0x1c));
-		}
-	}
-
-	{
-		DRM_INFO("TEMP dsi phy %d ENABLED usecase=%d: status=%08x ctrl0=%08x ctrl1=%08x ctrl2=%08x ctrl3=%08x clk_cfg0=%08x clk_cfg1=%08x glbl=%08x pll_cntrl=%08x rbuf=%08x vreg0=%08x lane0=%08x lane1=%08x lane2=%08x lane3=%08x lane4=%08x lptx_str=%08x\n",
-			 phy->id, phy->usecase,
-			 readl(base + REG_DSI_7nm_PHY_CMN_PHY_STATUS),
-			 readl(base + REG_DSI_7nm_PHY_CMN_CTRL_0),
-			 readl(base + REG_DSI_7nm_PHY_CMN_CTRL_1),
-			 readl(base + REG_DSI_7nm_PHY_CMN_CTRL_2),
-			 readl(base + REG_DSI_7nm_PHY_CMN_CTRL_3),
-			 readl(base + REG_DSI_7nm_PHY_CMN_CLK_CFG0),
-			 readl(base + REG_DSI_7nm_PHY_CMN_CLK_CFG1),
-			 readl(base + REG_DSI_7nm_PHY_CMN_GLBL_CTRL),
-			 readl(base + REG_DSI_7nm_PHY_CMN_PLL_CNTRL),
-			 readl(base + REG_DSI_7nm_PHY_CMN_RBUF_CTRL),
-			 readl(base + REG_DSI_7nm_PHY_CMN_VREG_CTRL_0),
-			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL0),
-			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL1),
-			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL2),
-			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL3),
-			 readl(base + REG_DSI_7nm_PHY_CMN_LANE_CTRL4),
-			 readl(base + REG_DSI_7nm_PHY_CMN_GLBL_LPTX_STR_CTRL));
-	}
 
 	DBG("DSI%d PHY enabled", phy->id);
 

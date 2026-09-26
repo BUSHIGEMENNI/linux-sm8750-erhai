@@ -534,15 +534,6 @@ restore_host0:
 	return ret;
 }
 
-/* TEMP(erhai): dump the other link of a bonded pair (TECH-DEBT D19). */
-void msm_dsi_manager_temp_dump_peer(int id)
-{
-	struct msm_dsi *peer = dsi_mgr_get_dsi(id == DSI_0 ? DSI_1 : DSI_0);
-
-	if (IS_SYNC_NEEDED() && peer)
-		msm_dsi_host_temp_dump(peer->host, "dma-timeout-peer");
-}
-
 bool msm_dsi_manager_cmd_xfer_trigger(int id, u32 dma_base, u32 len)
 {
 	struct msm_dsi *msm_dsi = dsi_mgr_get_dsi(id);

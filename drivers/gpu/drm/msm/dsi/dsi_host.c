@@ -32,47 +32,6 @@
 #include "msm_gem.h"
 #include "phy/dsi_phy.h"
 
-/*
- * TEMP(erhai): instrumentation for "the panel never re-initialises after a
- * blank" (TECH-DEBT D19).  The first DCS write of the second panel prepare
- * times out on the link the panel driver talks to, while video keeps running,
- * so the question is what the second enable leaves different from the first.
- *
- *   temp_dsi_regdump	dump the link registers at ctrl-enable and on a DMA
- *			timeout, so the two enables can be diffed.
- *   temp_dsi_xfer_setrate
- *			0: do not re-apply the link clock rate for every
- *			command transfer.  The requested byte clock rate is a
- *			few tens of Hz away from what the PHY PLL can make, so
- *			every transfer re-programs the PLL under a live link.
- *   temp_dsi_xfer_hs	1: send commands in HS rather than LP, to tell a dead
- *			LP escape path apart from a dead DMA engine.
- *
- * Drop all three before erhai/main.
- */
-static int temp_dsi_regdump;
-module_param_named(temp_dsi_regdump, temp_dsi_regdump, int, 0644);
-static int temp_dsi_xfer_setrate = 1;
-module_param_named(temp_dsi_xfer_setrate, temp_dsi_xfer_setrate, int, 0644);
-static int temp_dsi_xfer_hs;
-module_param_named(temp_dsi_xfer_hs, temp_dsi_xfer_hs, int, 0644);
-/*
- * The registers the driver programs come back identical on the second enable,
- * so whatever differs is one it never writes -- and the block power-collapses
- * between the two, which is exactly when a value the bootloader left behind
- * would disappear.  temp_dsi_blockdump=1 dumps the whole 1 KiB control block at
- * every enable, so the first enable and the second can be diffed word by word.
- */
-static int temp_dsi_blockdump;
-module_param_named(temp_dsi_blockdump, temp_dsi_blockdump, int, 0644);
-/* Clear TRIG_CTRL.BLOCK_DMA_WITHIN_FRAME, the one bit that can hold a
- * triggered DMA back on a video-mode link with no frames running. */
-static int temp_dsi_no_block_dma;
-module_param_named(temp_dsi_no_block_dma, temp_dsi_no_block_dma, int, 0644);
-/* Reset the controller once before the first transfer of an enable. */
-static int temp_dsi_reset_before_xfer;
-module_param_named(temp_dsi_reset_before_xfer, temp_dsi_reset_before_xfer, int, 0644);
-
 #define DSI_RESET_TOGGLE_DELAY_MS 20
 
 static int dsi_populate_dsc_params(struct msm_dsi_host *msm_host, struct drm_dsc_config *dsc);
@@ -142,10 +101,6 @@ static int dsi_get_version(const void __iomem *base, u32 *major, u32 *minor)
 
 struct msm_dsi_host {
 	struct mipi_dsi_host base;
-
-	/* TEMP(erhai): transfers since this enable, so only the first few are
-	 * dumped rather than all 122 panel init commands. */
-	unsigned int temp_xfers;
 
 	struct platform_device *pdev;
 	struct drm_device *dev;
@@ -848,65 +803,6 @@ bool msm_dsi_host_is_wide_bus_enabled(struct mipi_dsi_host *host)
 					MSM_DSI_6G_VER_MINOR_V2_5_0);
 }
 
-/* TEMP(erhai): the whole control block, eight words to a line. */
-static void temp_dsi_block(struct msm_dsi_host *msm_host, const char *tag)
-{
-	u32 offset;
-
-	if (!temp_dsi_blockdump)
-		return;
-
-	for (offset = 0; offset < 0x400; offset += 0x20)
-		DRM_INFO("TEMP block %s %s +%03x: %08x %08x %08x %08x %08x %08x %08x %08x\n",
-			 tag, dev_name(&msm_host->pdev->dev), offset,
-			 dsi_read(msm_host, offset + 0x00),
-			 dsi_read(msm_host, offset + 0x04),
-			 dsi_read(msm_host, offset + 0x08),
-			 dsi_read(msm_host, offset + 0x0c),
-			 dsi_read(msm_host, offset + 0x10),
-			 dsi_read(msm_host, offset + 0x14),
-			 dsi_read(msm_host, offset + 0x18),
-			 dsi_read(msm_host, offset + 0x1c));
-}
-
-void msm_dsi_host_temp_dump(struct mipi_dsi_host *host, const char *tag);
-
-/* TEMP(erhai): one line per link, so boot and re-enable can be diffed. */
-static void temp_dsi_regs(struct msm_dsi_host *msm_host, const char *tag)
-{
-	if (!temp_dsi_regdump)
-		return;
-
-	DRM_INFO("TEMP regs %s %s: ctrl=%08x st0=%08x fifo=%08x lane_st=%08x lane_ctrl=%08x lane_swap=%08x trig=%08x clk_ctrl=%08x clk_st=%08x dma_ctrl=%08x dma_base=%08x dma_len=%08x intr=%08x err_mask=%08x ack_err=%08x tmo=%08x dln0=%08x eot=%08x clkout=%08x cphy=%08x\n",
-		 tag, dev_name(&msm_host->pdev->dev),
-		 dsi_read(msm_host, REG_DSI_CTRL),
-		 dsi_read(msm_host, REG_DSI_STATUS0),
-		 dsi_read(msm_host, REG_DSI_FIFO_STATUS),
-		 dsi_read(msm_host, REG_DSI_LANE_STATUS),
-		 dsi_read(msm_host, REG_DSI_LANE_CTRL),
-		 dsi_read(msm_host, REG_DSI_LANE_SWAP_CTRL),
-		 dsi_read(msm_host, REG_DSI_TRIG_CTRL),
-		 dsi_read(msm_host, REG_DSI_CLK_CTRL),
-		 dsi_read(msm_host, REG_DSI_CLK_STATUS),
-		 dsi_read(msm_host, REG_DSI_CMD_DMA_CTRL),
-		 dsi_read(msm_host, REG_DSI_DMA_BASE),
-		 dsi_read(msm_host, REG_DSI_DMA_LEN),
-		 dsi_read(msm_host, REG_DSI_INTR_CTRL),
-		 dsi_read(msm_host, REG_DSI_ERR_INT_MASK0),
-		 dsi_read(msm_host, REG_DSI_ACK_ERR_STATUS),
-		 dsi_read(msm_host, REG_DSI_TIMEOUT_STATUS),
-		 dsi_read(msm_host, REG_DSI_DLN0_PHY_ERR),
-		 dsi_read(msm_host, REG_DSI_EOT_PACKET_CTRL),
-		 dsi_read(msm_host, REG_DSI_CLKOUT_TIMING_CTRL),
-		 dsi_read(msm_host, REG_DSI_CPHY_MODE_CTRL));
-}
-
-/* TEMP(erhai): the manager calls this for the other link of a bonded pair. */
-void msm_dsi_host_temp_dump(struct mipi_dsi_host *host, const char *tag)
-{
-	temp_dsi_regs(to_msm_dsi_host(host), tag);
-}
-
 static void dsi_ctrl_enable(struct msm_dsi_host *msm_host,
 			struct msm_dsi_phy_shared_timings *phy_shared_timings, struct msm_dsi_phy *phy)
 {
@@ -976,8 +872,7 @@ static void dsi_ctrl_enable(struct msm_dsi_host *msm_host,
 	data |= DSI_TRIG_CTRL_DMA_TRIGGER(TRIGGER_SW);
 	data |= DSI_TRIG_CTRL_STREAM(msm_host->channel);
 	if ((cfg_hnd->major == MSM_DSI_VER_MAJOR_6G) &&
-		(cfg_hnd->minor >= MSM_DSI_6G_VER_MINOR_V1_2) &&
-		!temp_dsi_no_block_dma)
+		(cfg_hnd->minor >= MSM_DSI_6G_VER_MINOR_V1_2))
 		data |= DSI_TRIG_CTRL_BLOCK_DMA_WITHIN_FRAME;
 	dsi_write(msm_host, REG_DSI_TRIG_CTRL, data);
 
@@ -1027,10 +922,6 @@ static void dsi_ctrl_enable(struct msm_dsi_host *msm_host,
 
 	if (msm_host->cphy_mode)
 		dsi_write(msm_host, REG_DSI_CPHY_MODE_CTRL, BIT(0));
-
-	temp_dsi_regs(msm_host, "ctrl-enable");
-	temp_dsi_block(msm_host, "ctrl-enable");
-	msm_host->temp_xfers = 0;
 }
 
 static void dsi_update_dsc_timing(struct msm_dsi_host *msm_host, bool is_cmd_mode)
@@ -1577,30 +1468,16 @@ static int dsi_cmd_dma_tx(struct msm_dsi_host *msm_host, int len)
 
 	dsi_wait4video_eng_busy(msm_host);
 
-	/* TEMP(erhai): the first transfers of an enable, from both sides of the
-	 * trigger, so a working one and a hung one can be compared. */
-	if (msm_host->temp_xfers++ < 2) {
-		temp_dsi_regs(msm_host, "pre-trigger");
-		temp_dsi_block(msm_host, "pre-trigger");
-	}
-
 	triggered = msm_dsi_manager_cmd_xfer_trigger(
 						msm_host->id, dma_base, len);
 	if (triggered) {
 		ret = wait_for_completion_timeout(&msm_host->dma_comp,
 					msecs_to_jiffies(200));
 		DBG("ret=%d", ret);
-		if (ret == 0) {
-			/* TEMP(erhai): what both links looked like when the DMA
-			 * never reported done -- the pair is triggered
-			 * together, so whether the other one finished says
-			 * whether this is one link or the whole block. */
-			temp_dsi_regs(msm_host, "dma-timeout");
-			msm_dsi_manager_temp_dump_peer(msm_host->id);
+		if (ret == 0)
 			ret = -ETIMEDOUT;
-		} else {
+		else
 			ret = len;
-		}
 	} else {
 		ret = len;
 	}
@@ -2361,25 +2238,12 @@ int msm_dsi_host_xfer_prepare(struct mipi_dsi_host *host,
 	 * mdp clock need to be enabled to receive dsi interrupt
 	 */
 	pm_runtime_get_sync(&msm_host->pdev->dev);
-	/* TEMP(erhai): see temp_dsi_reset_before_xfer above. */
-	if (temp_dsi_reset_before_xfer && !msm_host->temp_xfers)
-		dsi_sw_reset(msm_host);
-	/* TEMP(erhai): see temp_dsi_xfer_setrate above. */
-	if (temp_dsi_xfer_setrate) {
-		unsigned long was = clk_get_rate(msm_host->byte_clk);
-
-		cfg_hnd->ops->link_clk_set_rate(msm_host);
-		if (temp_dsi_regdump)
-			DRM_INFO("TEMP xfer set_rate %s: byte %lu -> %lu (want %lu)\n",
-				 dev_name(&msm_host->pdev->dev), was,
-				 clk_get_rate(msm_host->byte_clk),
-				 msm_host->byte_clk_rate);
-	}
+	cfg_hnd->ops->link_clk_set_rate(msm_host);
 	cfg_hnd->ops->link_clk_enable(msm_host);
 
 	/* TODO: vote for bus bandwidth */
 
-	if (temp_dsi_xfer_hs || !(msg->flags & MIPI_DSI_MSG_USE_LPM))
+	if (!(msg->flags & MIPI_DSI_MSG_USE_LPM))
 		dsi_set_tx_power_mode(0, msm_host);
 
 	msm_host->dma_cmd_ctrl_restore = dsi_read(msm_host, REG_DSI_CTRL);
@@ -2401,7 +2265,7 @@ void msm_dsi_host_xfer_restore(struct mipi_dsi_host *host,
 	dsi_intr_ctrl(msm_host, DSI_IRQ_MASK_CMD_DMA_DONE, 0);
 	dsi_write(msm_host, REG_DSI_CTRL, msm_host->dma_cmd_ctrl_restore);
 
-	if (temp_dsi_xfer_hs || !(msg->flags & MIPI_DSI_MSG_USE_LPM))
+	if (!(msg->flags & MIPI_DSI_MSG_USE_LPM))
 		dsi_set_tx_power_mode(1, msm_host);
 
 	/* TODO: unvote for bus bandwidth */
