@@ -4,12 +4,18 @@
  */
 
 #include <linux/bitfield.h>
+#include <linux/debugfs.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqdomain.h>
 #include <linux/mailbox_controller.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/sched/clock.h>
+#include <linux/seq_file.h>
+#include <linux/slab.h>
+#include <linux/suspend.h>
+#include <linux/syscore_ops.h>
 
 #include <dt-bindings/mailbox/qcom-ipcc.h>
 
@@ -27,6 +33,70 @@
 #define IPCC_CLIENT_ID_MASK		GENMASK(31, 16)
 
 #define IPCC_NO_PENDING_IRQ		GENMASK(31, 0)
+
+/*
+ * TEMP: wake trace for the deep suspend bring-up.  Off by default; to be
+ * reverted once the source of the early wake-ups has been identified.
+ */
+static bool temp_wake_trace;
+module_param(temp_wake_trace, bool, 0444);
+MODULE_PARM_DESC(temp_wake_trace,
+		 "TEMP: record the IPCC signals around system suspend (default: off)");
+
+#define IPCC_WAKE_CYCLES		4
+#define IPCC_WAKE_RECS			8
+#define IPCC_WAKE_LINE			192
+/* RECV_ID was not read because reading it would have cleared the signal */
+#define IPCC_WAKE_UNREAD		0xfffffffe
+
+enum qcom_ipcc_wake_point {
+	IPCC_WAKE_NOIRQ_SUSPEND,
+	IPCC_WAKE_SYSCORE_SUSPEND,
+	IPCC_WAKE_SYSCORE_RESUME,
+	IPCC_WAKE_NOIRQ_RESUME,
+	IPCC_WAKE_POINTS,
+};
+
+static const char * const qcom_ipcc_wake_point_names[IPCC_WAKE_POINTS] = {
+	[IPCC_WAKE_NOIRQ_SUSPEND] = "noirq-suspend",
+	[IPCC_WAKE_SYSCORE_SUSPEND] = "syscore-suspend",
+	[IPCC_WAKE_SYSCORE_RESUME] = "syscore-resume",
+	[IPCC_WAKE_NOIRQ_RESUME] = "noirq-resume",
+};
+
+enum qcom_ipcc_wake_window {
+	IPCC_WAKE_IDLE,
+	IPCC_WAKE_PRE,		/* noirq suspend until syscore suspend */
+	IPCC_WAKE_ASLEEP,	/* syscore suspend until syscore resume */
+	IPCC_WAKE_POST,		/* syscore resume until complete */
+};
+
+struct qcom_ipcc_wake_rec {
+	u64 ts;
+	u32 hwirq;
+	int virq;
+	bool disabled;
+};
+
+struct qcom_ipcc_wake_cycle {
+	u32 seq;
+	bool seen[IPCC_WAKE_POINTS];
+	u32 pending[IPCC_WAKE_POINTS];
+	u64 pending_ts[IPCC_WAKE_POINTS];
+	u32 pre_count;
+	struct qcom_ipcc_wake_rec pre_first;
+	u32 post_count;
+	struct qcom_ipcc_wake_rec post[IPCC_WAKE_RECS];
+};
+
+struct qcom_ipcc_wake_trace {
+	raw_spinlock_t lock;
+	enum qcom_ipcc_wake_window window;
+	u32 seq;
+	struct qcom_ipcc_wake_cycle cycles[IPCC_WAKE_CYCLES];
+	struct syscore syscore;
+	struct dentry *debugfs;
+};
 
 /**
  * struct qcom_ipcc_chan_info - Per-mailbox-channel info
@@ -48,6 +118,7 @@ struct qcom_ipcc_chan_info {
  * @mbox:		The mailbox controller
  * @num_chans:		Number of @chans elements
  * @irq:		Summary irq
+ * @wake:		TEMP wake trace, NULL unless temp_wake_trace is set
  */
 struct qcom_ipcc {
 	struct device *dev;
@@ -58,6 +129,7 @@ struct qcom_ipcc {
 	struct mbox_controller mbox;
 	int num_chans;
 	int irq;
+	struct qcom_ipcc_wake_trace *wake;
 };
 
 static inline struct qcom_ipcc *to_qcom_ipcc(struct mbox_controller *mbox)
@@ -69,6 +141,326 @@ static inline u32 qcom_ipcc_get_hwirq(u16 client_id, u16 signal_id)
 {
 	return FIELD_PREP(IPCC_CLIENT_ID_MASK, client_id) |
 	       FIELD_PREP(IPCC_SIGNAL_ID_MASK, signal_id);
+}
+
+static const char * const qcom_ipcc_client_names[] = {
+	[IPCC_CLIENT_AOP] = "aop",
+	[IPCC_CLIENT_TZ] = "tz",
+	[IPCC_CLIENT_MPSS] = "mpss",
+	[IPCC_CLIENT_LPASS] = "lpass",
+	[IPCC_CLIENT_SLPI] = "slpi",
+	[IPCC_CLIENT_SDC] = "sdc",
+	[IPCC_CLIENT_CDSP] = "cdsp",
+	[IPCC_CLIENT_NPU] = "npu",
+	[IPCC_CLIENT_APSS] = "apss",
+	[IPCC_CLIENT_GPU] = "gpu",
+	[IPCC_CLIENT_CVP] = "cvp",
+	[IPCC_CLIENT_CAM] = "cam",
+	[IPCC_CLIENT_VPU] = "vpu",
+	[IPCC_CLIENT_PCIE0] = "pcie0",
+	[IPCC_CLIENT_PCIE1] = "pcie1",
+	[IPCC_CLIENT_PCIE2] = "pcie2",
+	[IPCC_CLIENT_SPSS] = "spss",
+	[IPCC_CLIENT_NSP1] = "nsp1",
+	[IPCC_CLIENT_TME] = "tme",
+	[IPCC_CLIENT_WPSS] = "wpss",
+	[IPCC_CLIENT_GPDSP0] = "gpdsp0",
+	[IPCC_CLIENT_GPDSP1] = "gpdsp1",
+};
+
+static const char *qcom_ipcc_wake_client(u32 client)
+{
+	if (client < ARRAY_SIZE(qcom_ipcc_client_names) &&
+	    qcom_ipcc_client_names[client])
+		return qcom_ipcc_client_names[client];
+
+	return "unknown";
+}
+
+/* Which protocol the signal belongs to, as wired in the SoC device trees */
+static const char *qcom_ipcc_wake_source(u32 client, u32 signal)
+{
+	switch (signal) {
+	case IPCC_MPROC_SIGNAL_GLINK_QMP:
+		return client == IPCC_CLIENT_AOP ? "aoss-qmp" : "glink";
+	case IPCC_MPROC_SIGNAL_TZ:
+		return "tz";
+	case IPCC_MPROC_SIGNAL_SMP2P:
+		return "smp2p";
+	case IPCC_MPROC_SIGNAL_PING:
+		return "ping";
+	default:
+		return "other";
+	}
+}
+
+static int qcom_ipcc_wake_desc(struct qcom_ipcc *ipcc, char *buf, size_t size,
+			       u32 hwirq)
+{
+	u32 client = FIELD_GET(IPCC_CLIENT_ID_MASK, hwirq);
+	u32 signal = FIELD_GET(IPCC_SIGNAL_ID_MASK, hwirq);
+
+	if (hwirq == IPCC_NO_PENDING_IRQ)
+		return scnprintf(buf, size, "client=none");
+	if (hwirq == IPCC_WAKE_UNREAD)
+		return scnprintf(buf, size, "client=unread");
+
+	return scnprintf(buf, size,
+			 "client=%u cname=%s signal=%u source=%s virq=%u",
+			 client, qcom_ipcc_wake_client(client), signal,
+			 qcom_ipcc_wake_source(client, signal),
+			 irq_find_mapping(ipcc->irq_domain, hwirq));
+}
+
+static int qcom_ipcc_wake_point_line(struct qcom_ipcc *ipcc, char *buf,
+				     size_t size,
+				     const struct qcom_ipcc_wake_cycle *c,
+				     enum qcom_ipcc_wake_point point)
+{
+	u32 rem;
+	u64 sec = div_u64_rem(c->pending_ts[point], NSEC_PER_SEC, &rem);
+	int n;
+
+	n = scnprintf(buf, size, "seq=%u point=%s t=%llu.%06u ", c->seq,
+		      qcom_ipcc_wake_point_names[point], sec,
+		      (u32)(rem / NSEC_PER_USEC));
+
+	return n + qcom_ipcc_wake_desc(ipcc, buf + n, size - n,
+				       c->pending[point]);
+}
+
+static int qcom_ipcc_wake_rec_line(struct qcom_ipcc *ipcc, char *buf,
+				   size_t size,
+				   const struct qcom_ipcc_wake_cycle *c,
+				   const char *window, unsigned int index,
+				   const struct qcom_ipcc_wake_rec *rec)
+{
+	u32 rem;
+	u64 sec = div_u64_rem(rec->ts, NSEC_PER_SEC, &rem);
+	int n;
+
+	n = scnprintf(buf, size, "seq=%u irq=%s index=%u t=%llu.%06u ",
+		      c->seq, window, index, sec, (u32)(rem / NSEC_PER_USEC));
+	n += qcom_ipcc_wake_desc(ipcc, buf + n, size - n, rec->hwirq);
+
+	return n + scnprintf(buf + n, size - n, " disabled=%d", rec->disabled);
+}
+
+/*
+ * Print one finished cycle, except the syscore resume point which has
+ * already been printed as soon as it was read.
+ */
+static void qcom_ipcc_wake_print(struct qcom_ipcc *ipcc,
+				 const struct qcom_ipcc_wake_cycle *c)
+{
+	char line[IPCC_WAKE_LINE];
+	unsigned int i;
+
+	for (i = 0; i < IPCC_WAKE_POINTS; i++) {
+		if (!c->seen[i] || i == IPCC_WAKE_SYSCORE_RESUME)
+			continue;
+		qcom_ipcc_wake_point_line(ipcc, line, sizeof(line), c, i);
+		dev_info(ipcc->dev, "TEMP wake: %s\n", line);
+	}
+
+	if (c->pre_count) {
+		qcom_ipcc_wake_rec_line(ipcc, line, sizeof(line), c, "pre", 0,
+					&c->pre_first);
+		dev_info(ipcc->dev, "TEMP wake: %s\n", line);
+	}
+
+	for (i = 0; i < min_t(u32, c->post_count, IPCC_WAKE_RECS); i++) {
+		qcom_ipcc_wake_rec_line(ipcc, line, sizeof(line), c, "post", i,
+					&c->post[i]);
+		dev_info(ipcc->dev, "TEMP wake: %s\n", line);
+	}
+
+	dev_info(ipcc->dev, "TEMP wake: seq=%u done pre_count=%u post_count=%u\n",
+		 c->seq, c->pre_count, c->post_count);
+}
+
+/* Called from the summary interrupt handler, interrupts disabled */
+static void qcom_ipcc_wake_note(struct qcom_ipcc *ipcc, u32 hwirq, int virq)
+{
+	struct qcom_ipcc_wake_trace *wake = ipcc->wake;
+	struct qcom_ipcc_wake_rec *rec = NULL;
+	struct qcom_ipcc_wake_cycle *c;
+	struct irq_data *irqd;
+
+	raw_spin_lock(&wake->lock);
+	c = &wake->cycles[wake->seq % IPCC_WAKE_CYCLES];
+	switch (wake->window) {
+	case IPCC_WAKE_PRE:
+		if (!c->pre_count++)
+			rec = &c->pre_first;
+		break;
+	case IPCC_WAKE_POST:
+		if (c->post_count < IPCC_WAKE_RECS)
+			rec = &c->post[c->post_count];
+		c->post_count++;
+		break;
+	default:
+		break;
+	}
+
+	if (rec) {
+		irqd = virq > 0 ? irq_get_irq_data(virq) : NULL;
+		rec->ts = local_clock();
+		rec->hwirq = hwirq;
+		rec->virq = virq;
+		rec->disabled = irqd && irqd_irq_disabled(irqd);
+	}
+	raw_spin_unlock(&wake->lock);
+}
+
+/*
+ * Read the highest priority pending signal without consuming it: probe
+ * cleared CLEAR_ON_RECV_RD, but do not trust that across a power collapse.
+ */
+static u32 qcom_ipcc_wake_peek(struct qcom_ipcc *ipcc)
+{
+	if (readl(ipcc->base + IPCC_REG_CONFIG) & IPCC_CLEAR_ON_RECV_RD)
+		return IPCC_WAKE_UNREAD;
+
+	return readl(ipcc->base + IPCC_REG_RECV_ID);
+}
+
+static void qcom_ipcc_wake_point(struct qcom_ipcc *ipcc,
+				 enum qcom_ipcc_wake_point point,
+				 enum qcom_ipcc_wake_window window)
+{
+	struct qcom_ipcc_wake_trace *wake = ipcc->wake;
+	struct qcom_ipcc_wake_cycle *c;
+	unsigned long flags;
+	u32 hwirq;
+
+	hwirq = qcom_ipcc_wake_peek(ipcc);
+
+	raw_spin_lock_irqsave(&wake->lock, flags);
+	if (point == IPCC_WAKE_NOIRQ_SUSPEND) {
+		wake->seq++;
+		c = &wake->cycles[wake->seq % IPCC_WAKE_CYCLES];
+		memset(c, 0, sizeof(*c));
+		c->seq = wake->seq;
+	}
+	c = &wake->cycles[wake->seq % IPCC_WAKE_CYCLES];
+	c->seen[point] = true;
+	c->pending[point] = hwirq;
+	c->pending_ts[point] = local_clock();
+	wake->window = window;
+	raw_spin_unlock_irqrestore(&wake->lock, flags);
+}
+
+static int qcom_ipcc_wake_syscore_suspend(void *data)
+{
+	struct qcom_ipcc *ipcc = data;
+
+	if (ipcc->wake->window == IPCC_WAKE_PRE)
+		qcom_ipcc_wake_point(ipcc, IPCC_WAKE_SYSCORE_SUSPEND,
+				     IPCC_WAKE_ASLEEP);
+
+	return 0;
+}
+
+/*
+ * Runs on the boot CPU with interrupts still disabled, right after the
+ * firmware returns: whatever is pending here is what the summary handler
+ * will take first once interrupts are enabled, before any noirq callback.
+ */
+static void qcom_ipcc_wake_syscore_resume(void *data)
+{
+	struct qcom_ipcc *ipcc = data;
+	struct qcom_ipcc_wake_cycle *c;
+	char line[IPCC_WAKE_LINE];
+
+	if (ipcc->wake->window != IPCC_WAKE_ASLEEP)
+		return;
+
+	qcom_ipcc_wake_point(ipcc, IPCC_WAKE_SYSCORE_RESUME, IPCC_WAKE_POST);
+	c = &ipcc->wake->cycles[ipcc->wake->seq % IPCC_WAKE_CYCLES];
+	qcom_ipcc_wake_point_line(ipcc, line, sizeof(line), c,
+				  IPCC_WAKE_SYSCORE_RESUME);
+	dev_info(ipcc->dev, "TEMP wake: %s\n", line);
+}
+
+static const struct syscore_ops qcom_ipcc_wake_syscore_ops = {
+	.suspend = qcom_ipcc_wake_syscore_suspend,
+	.resume = qcom_ipcc_wake_syscore_resume,
+};
+
+static int qcom_ipcc_wake_show(struct seq_file *s, void *unused)
+{
+	struct qcom_ipcc *ipcc = s->private;
+	struct qcom_ipcc_wake_trace *wake = ipcc->wake;
+	struct qcom_ipcc_wake_cycle *cycles, *c;
+	char line[IPCC_WAKE_LINE];
+	unsigned long flags;
+	u32 seq, first, i, j;
+
+	cycles = kmalloc_objs(*cycles, IPCC_WAKE_CYCLES, GFP_KERNEL);
+	if (!cycles)
+		return -ENOMEM;
+
+	raw_spin_lock_irqsave(&wake->lock, flags);
+	memcpy(cycles, wake->cycles, sizeof(wake->cycles));
+	seq = wake->seq;
+	raw_spin_unlock_irqrestore(&wake->lock, flags);
+
+	first = seq > IPCC_WAKE_CYCLES ? seq - IPCC_WAKE_CYCLES + 1 : 1;
+	for (i = first; i <= seq; i++) {
+		c = &cycles[i % IPCC_WAKE_CYCLES];
+		for (j = 0; j < IPCC_WAKE_POINTS; j++) {
+			if (!c->seen[j])
+				continue;
+			qcom_ipcc_wake_point_line(ipcc, line, sizeof(line), c, j);
+			seq_printf(s, "%s\n", line);
+		}
+		if (c->pre_count) {
+			qcom_ipcc_wake_rec_line(ipcc, line, sizeof(line), c,
+						"pre", 0, &c->pre_first);
+			seq_printf(s, "%s\n", line);
+		}
+		for (j = 0; j < min_t(u32, c->post_count, IPCC_WAKE_RECS); j++) {
+			qcom_ipcc_wake_rec_line(ipcc, line, sizeof(line), c,
+						"post", j, &c->post[j]);
+			seq_printf(s, "%s\n", line);
+		}
+		seq_printf(s, "seq=%u done pre_count=%u post_count=%u\n",
+			   c->seq, c->pre_count, c->post_count);
+	}
+
+	kfree(cycles);
+
+	return 0;
+}
+DEFINE_SHOW_ATTRIBUTE(qcom_ipcc_wake);
+
+static int qcom_ipcc_wake_init(struct qcom_ipcc *ipcc)
+{
+	ipcc->wake = devm_kzalloc(ipcc->dev, sizeof(*ipcc->wake), GFP_KERNEL);
+	if (!ipcc->wake)
+		return -ENOMEM;
+
+	raw_spin_lock_init(&ipcc->wake->lock);
+	ipcc->wake->syscore.ops = &qcom_ipcc_wake_syscore_ops;
+	ipcc->wake->syscore.data = ipcc;
+
+	return 0;
+}
+
+static void qcom_ipcc_wake_start(struct qcom_ipcc *ipcc)
+{
+	char *name;
+
+	register_syscore(&ipcc->wake->syscore);
+
+	name = devm_kasprintf(ipcc->dev, GFP_KERNEL, "qcom_ipcc_wake_trace-%s",
+			      dev_name(ipcc->dev));
+	if (name)
+		ipcc->wake->debugfs = debugfs_create_file(name, 0400, NULL, ipcc,
+							  &qcom_ipcc_wake_fops);
+
+	dev_info(ipcc->dev, "TEMP wake trace enabled\n");
 }
 
 static irqreturn_t qcom_ipcc_irq_fn(int irq, void *data)
@@ -83,6 +475,8 @@ static irqreturn_t qcom_ipcc_irq_fn(int irq, void *data)
 			break;
 
 		virq = irq_find_mapping(ipcc->irq_domain, hwirq);
+		if (unlikely(ipcc->wake))
+			qcom_ipcc_wake_note(ipcc, hwirq, virq);
 		writel(hwirq, ipcc->base + IPCC_REG_RECV_SIGNAL_CLEAR);
 		generic_handle_irq(virq);
 	}
@@ -255,11 +649,49 @@ static int qcom_ipcc_setup_mbox(struct qcom_ipcc *ipcc,
 	return devm_mbox_controller_register(dev, mbox);
 }
 
+static int qcom_ipcc_pm_suspend(struct device *dev)
+{
+	struct qcom_ipcc *ipcc = dev_get_drvdata(dev);
+
+	if (ipcc->wake && pm_suspend_in_progress())
+		qcom_ipcc_wake_point(ipcc, IPCC_WAKE_NOIRQ_SUSPEND,
+				     IPCC_WAKE_PRE);
+
+	return 0;
+}
+
+static void qcom_ipcc_pm_complete(struct device *dev)
+{
+	struct qcom_ipcc *ipcc = dev_get_drvdata(dev);
+	struct qcom_ipcc_wake_trace *wake = ipcc->wake;
+	struct qcom_ipcc_wake_cycle c;
+	unsigned long flags;
+
+	if (!wake)
+		return;
+
+	raw_spin_lock_irqsave(&wake->lock, flags);
+	if (wake->window == IPCC_WAKE_IDLE) {
+		raw_spin_unlock_irqrestore(&wake->lock, flags);
+		return;
+	}
+	wake->window = IPCC_WAKE_IDLE;
+	c = wake->cycles[wake->seq % IPCC_WAKE_CYCLES];
+	raw_spin_unlock_irqrestore(&wake->lock, flags);
+
+	qcom_ipcc_wake_print(ipcc, &c);
+}
+
 static int qcom_ipcc_pm_resume(struct device *dev)
 {
 	struct qcom_ipcc *ipcc = dev_get_drvdata(dev);
 	u32 hwirq;
 	int virq;
+
+	/* After s2idle, or a suspend that stopped short of syscore, the window opens here */
+	if (ipcc->wake && ipcc->wake->window != IPCC_WAKE_IDLE)
+		qcom_ipcc_wake_point(ipcc, IPCC_WAKE_NOIRQ_RESUME,
+				     IPCC_WAKE_POST);
 
 	hwirq = readl(ipcc->base + IPCC_REG_RECV_ID);
 	if (hwirq == IPCC_NO_PENDING_IRQ)
@@ -320,6 +752,12 @@ static int qcom_ipcc_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_mbox;
 
+	if (temp_wake_trace) {
+		ret = qcom_ipcc_wake_init(ipcc);
+		if (ret)
+			goto err_req_irq;
+	}
+
 	ret = devm_request_irq(&pdev->dev, ipcc->irq, qcom_ipcc_irq_fn,
 			       IRQF_TRIGGER_HIGH | IRQF_NO_SUSPEND |
 			       IRQF_NO_THREAD, name, ipcc);
@@ -329,6 +767,9 @@ static int qcom_ipcc_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, ipcc);
+
+	if (ipcc->wake)
+		qcom_ipcc_wake_start(ipcc);
 
 	return 0;
 
@@ -345,6 +786,10 @@ static void qcom_ipcc_remove(struct platform_device *pdev)
 {
 	struct qcom_ipcc *ipcc = platform_get_drvdata(pdev);
 
+	if (ipcc->wake) {
+		debugfs_remove(ipcc->wake->debugfs);
+		unregister_syscore(&ipcc->wake->syscore);
+	}
 	disable_irq_wake(ipcc->irq);
 	irq_domain_remove(ipcc->irq_domain);
 }
@@ -356,7 +801,8 @@ static const struct of_device_id qcom_ipcc_of_match[] = {
 MODULE_DEVICE_TABLE(of, qcom_ipcc_of_match);
 
 static const struct dev_pm_ops qcom_ipcc_dev_pm_ops = {
-	NOIRQ_SYSTEM_SLEEP_PM_OPS(NULL, qcom_ipcc_pm_resume)
+	NOIRQ_SYSTEM_SLEEP_PM_OPS(qcom_ipcc_pm_suspend, qcom_ipcc_pm_resume)
+	.complete = qcom_ipcc_pm_complete,
 };
 
 static struct platform_driver qcom_ipcc_driver = {
