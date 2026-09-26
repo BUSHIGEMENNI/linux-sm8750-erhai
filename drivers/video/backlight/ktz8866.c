@@ -15,6 +15,7 @@
 #include <linux/of.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
+#include <linux/regulator/driver.h>
 
 #define DEFAULT_BRIGHTNESS 1500
 #define MAX_BRIGHTNESS 2047
@@ -51,7 +52,7 @@
 /*
  * KTZ8868: the LED driver is not live until KTZ8868_BL_CTRL is written after
  * the sink enable + brightness (the sink bits alone leave the string dark),
- * and the LCD bias outputs are enabled through the ENP/ENN pins rather than
+ * and the LCD bias outputs are switched by the ENP/ENN pins rather than
  * LCD_BIAS_CFG1 bits. Values below follow the KTZ8868 reference sequence
  * (OVP 34V, linear dimming, 4.7uH/2.5A boost, 30mA/channel, sinks 1-3/5-6).
  */
@@ -70,11 +71,19 @@ enum ktz8866_variant {
 	KTZ8868,
 };
 
+enum ktz8868_bias_output {
+	KTZ8868_OUTP,
+	KTZ8868_OUTN,
+	KTZ8868_NUM_BIAS,
+};
+
 struct ktz8866 {
 	struct i2c_client *client;
 	struct regmap *regmap;
 	bool led_on;
-	struct gpio_descs *enable_gpios;
+	struct gpio_desc *enable_gpio;
+	struct gpio_desc *bias_gpio[KTZ8868_NUM_BIAS];
+	bool bias_on[KTZ8868_NUM_BIAS];
 	enum ktz8866_variant variant;
 	struct backlight_device *backlight;
 	struct led_classdev led;
@@ -247,45 +256,137 @@ static void ktz8866_init(struct ktz8866 *ktz)
 }
 
 /*
- * KTZ8868 power-up: HWEN, then the bias configuration over I2C, then the
- * ENP/ENN pins in that order with the settling delays the part needs. The
- * enable-gpios array is HWEN, ENP, ENN; a design that wires only HWEN gets
- * the same sequence minus the pin-driven bias enable.
+ * KTZ8868 power-up: HWEN, then the bias configuration over I2C. The bias
+ * section is left to follow the ENP/ENN pins, which the outp/outn regulators
+ * switch when the panel asks for its supplies.
  */
 static int ktz8868_power_up(struct ktz8866 *ktz)
 {
-	struct gpio_descs *gpios = ktz->enable_gpios;
-	bool lcd_bias = device_property_read_bool(&ktz->client->dev,
-						  "kinetic,enable-lcd-bias");
 	int ret;
 
-	if (!gpios)
+	if (!ktz->enable_gpio)
 		return 0;
 
-	ret = gpiod_direction_output(gpios->desc[0], 1);
+	ret = gpiod_direction_output(ktz->enable_gpio, 1);
 	if (ret)
 		return ret;
 	usleep_range(1000, 1500);
 
-	if (lcd_bias) {
+	if (device_property_read_bool(&ktz->client->dev,
+				      "kinetic,enable-lcd-bias")) {
 		ktz8866_write(ktz, LCD_BOOST_CFG, KTZ8868_LCD_BOOST_CFG_VAL);
 		ktz8866_write(ktz, OUTP_CFG, KTZ8868_OUTP_CFG_VAL);
 		ktz8866_write(ktz, OUTN_CFG, KTZ8868_OUTN_CFG_VAL);
 		ktz8866_write(ktz, LCD_BIAS_CFG1, KTZ8868_LCD_BIAS_CFG1_VAL);
 	}
 
-	if (gpios->ndescs < 3)
-		return 0;
+	return 0;
+}
 
-	usleep_range(1000, 1500);
-	ret = gpiod_direction_output(gpios->desc[1], 1);	/* ENP */
-	if (ret)
-		return ret;
-	msleep(8);
-	ret = gpiod_direction_output(gpios->desc[2], 1);	/* ENN */
-	if (ret)
-		return ret;
-	msleep(10);
+static int ktz8868_bias_enable(struct regulator_dev *rdev)
+{
+	struct ktz8866 *ktz = rdev_get_drvdata(rdev);
+	int id = rdev_get_id(rdev);
+
+	gpiod_set_value_cansleep(ktz->bias_gpio[id], 1);
+	ktz->bias_on[id] = true;
+
+	return 0;
+}
+
+static int ktz8868_bias_disable(struct regulator_dev *rdev)
+{
+	struct ktz8866 *ktz = rdev_get_drvdata(rdev);
+	int id = rdev_get_id(rdev);
+
+	gpiod_set_value_cansleep(ktz->bias_gpio[id], 0);
+	ktz->bias_on[id] = false;
+
+	return 0;
+}
+
+static int ktz8868_bias_is_enabled(struct regulator_dev *rdev)
+{
+	struct ktz8866 *ktz = rdev_get_drvdata(rdev);
+
+	return ktz->bias_on[rdev_get_id(rdev)];
+}
+
+static const struct regulator_ops ktz8868_bias_ops = {
+	.enable = ktz8868_bias_enable,
+	.disable = ktz8868_bias_disable,
+	.is_enabled = ktz8868_bias_is_enabled,
+};
+
+static const struct regulator_desc ktz8868_bias_desc[KTZ8868_NUM_BIAS] = {
+	[KTZ8868_OUTP] = {
+		.name = "outp",
+		.of_match = "outp",
+		.id = KTZ8868_OUTP,
+		.ops = &ktz8868_bias_ops,
+		.type = REGULATOR_VOLTAGE,
+		.owner = THIS_MODULE,
+	},
+	[KTZ8868_OUTN] = {
+		.name = "outn",
+		.of_match = "outn",
+		.id = KTZ8868_OUTN,
+		.ops = &ktz8868_bias_ops,
+		.type = REGULATOR_VOLTAGE,
+		.owner = THIS_MODULE,
+	},
+};
+
+/*
+ * Register the LCD bias outputs that have an outp/outn child node. Each is
+ * switched by its own enable pin; the level found at probe is kept, so a
+ * panel the boot loader lit keeps its bias until the panel driver takes the
+ * regulators over.
+ */
+static int ktz8868_register_bias(struct ktz8866 *ktz)
+{
+	struct device *dev = &ktz->client->dev;
+	struct regulator_config config = {
+		.dev = dev,
+		.driver_data = ktz,
+	};
+	int i, ret;
+
+	for (i = 0; i < KTZ8868_NUM_BIAS; i++) {
+		const struct regulator_desc *desc = &ktz8868_bias_desc[i];
+		struct fwnode_handle *child __free(fwnode_handle) =
+			device_get_named_child_node(dev, desc->of_match);
+		struct regulator_dev *rdev;
+		struct gpio_desc *gpio;
+
+		if (!child)
+			continue;
+
+		gpio = devm_fwnode_gpiod_get(dev, child, "enable", GPIOD_ASIS,
+					     desc->name);
+		if (IS_ERR(gpio))
+			return dev_err_probe(dev, PTR_ERR(gpio),
+					     "failed to get %s enable GPIO\n",
+					     desc->name);
+
+		ret = gpiod_get_value_cansleep(gpio);
+		if (ret < 0)
+			return dev_err_probe(dev, ret, "failed to read %s enable GPIO\n",
+					     desc->name);
+		ktz->bias_on[i] = ret;
+
+		ret = gpiod_direction_output(gpio, ktz->bias_on[i]);
+		if (ret)
+			return dev_err_probe(dev, ret, "failed to drive %s enable GPIO\n",
+					     desc->name);
+		ktz->bias_gpio[i] = gpio;
+
+		rdev = devm_regulator_register(dev, desc, &config);
+		if (IS_ERR(rdev))
+			return dev_err_probe(dev, PTR_ERR(rdev),
+					     "failed to register %s regulator\n",
+					     desc->name);
+	}
 
 	return 0;
 }
@@ -315,10 +416,11 @@ static int ktz8866_probe(struct i2c_client *client)
 	if (ret)
 		return dev_err_probe(&client->dev, ret, "get regulator vddneg failed\n");
 
-	ktz->enable_gpios = devm_gpiod_get_array_optional(&client->dev, "enable",
-			ktz->variant == KTZ8868 ? GPIOD_ASIS : GPIOD_OUT_HIGH);
-	if (IS_ERR(ktz->enable_gpios))
-		return PTR_ERR(ktz->enable_gpios);
+	ktz->enable_gpio = devm_gpiod_get_optional(&client->dev, "enable",
+						   ktz->variant == KTZ8868 ?
+						   GPIOD_ASIS : GPIOD_OUT_HIGH);
+	if (IS_ERR(ktz->enable_gpio))
+		return PTR_ERR(ktz->enable_gpio);
 
 	if (ktz->variant == KTZ8868) {
 		ktz->bl_en = KTZ8868_BL_EN_VAL;
@@ -327,6 +429,10 @@ static int ktz8866_probe(struct i2c_client *client)
 		ret = ktz8868_power_up(ktz);
 		if (ret)
 			return dev_err_probe(&client->dev, ret, "failed to power up\n");
+
+		ret = ktz8868_register_bias(ktz);
+		if (ret)
+			return ret;
 	}
 
 	i2c_set_clientdata(client, ktz);
