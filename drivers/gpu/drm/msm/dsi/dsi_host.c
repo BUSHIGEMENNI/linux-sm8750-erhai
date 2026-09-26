@@ -1082,19 +1082,6 @@ static void dsi_timing_setup(struct msm_dsi_host *msm_host, bool is_bonded_dsi)
 	}
 
 	if (msm_host->mode_flags & MIPI_DSI_MODE_VIDEO) {
-		/* TEMP(erhai): DSC never enabled on the link (reg reads 0);
-		 * find out whether dsc is attached when the timing setup runs. */
-		{
-			/* TEMP(erhai): read the live link state while streaming: is the
-			 * video engine busy, is the cmd fifo draining, are lanes up. */
-			u32 st0 = dsi_read(msm_host, REG_DSI_STATUS0);
-			u32 fifo = dsi_read(msm_host, REG_DSI_FIFO_STATUS);
-			u32 lane = dsi_read(msm_host, REG_DSI_LANE_STATUS);
-			u32 cmp = dsi_read(msm_host, REG_DSI_VIDEO_COMPRESSION_MODE_CTRL);
-			DRM_INFO("TEMP dsi_timing_setup %s: dsc=%p status0=%08x fifo=%08x lane=%08x dsc_ctrl=%08x\n",
-				 dev_name(&msm_host->pdev->dev), msm_host->dsc,
-				 st0, fifo, lane, cmp);
-		}
 		if (msm_host->dsc)
 			dsi_update_dsc_timing(msm_host, false);
 
@@ -2489,15 +2476,6 @@ int msm_dsi_host_enable(struct mipi_dsi_host *host)
 
 	dsi_op_mode_config(msm_host,
 		!!(msm_host->mode_flags & MIPI_DSI_MODE_VIDEO), true);
-
-	/* TEMP(erhai): the link never transmits; dump the enable state at the
-	 * exact moment it is (re)armed, no external timing race. */
-	{
-		u32 c = dsi_read(msm_host, REG_DSI_CTRL);
-		u32 st = dsi_read(msm_host, REG_DSI_STATUS0);
-		DRM_INFO("TEMP dsi host %s ENABLE: ctrl=0x%08x status0=0x%08x\n",
-			 dev_name(&msm_host->pdev->dev), c, st);
-	}
 
 	/* TODO: clock should be turned off for command mode,
 	 * and only turned on before MDP START.
