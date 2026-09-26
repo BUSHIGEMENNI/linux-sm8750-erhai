@@ -216,27 +216,6 @@ static struct platform_driver dsi_driver = {
 	},
 };
 
-/* TEMP(erhai): debugfs trigger for the bonded-DSI test pattern generator, to
- * isolate "DPU never finishes a frame" from "panel/DSI link dead": a black
- * panel with a correct TPG checkerboard means the loss is upstream of the
- * DSI host. Write anything to /sys/kernel/debug/dsi-tpg/enable to fire. */
-#include <linux/debugfs.h>
-static int dsi_tpg_enable_write(void *data, u64 val)
-{
-	msm_dsi_manager_tpg_enable();
-	return 0;
-}
-DEFINE_DEBUGFS_ATTRIBUTE(dsi_tpg_enable_fops, NULL, dsi_tpg_enable_write, "%llu");
-
-static int __init dsi_tpg_debugfs_init(void)
-{
-	struct dentry *d = debugfs_create_dir("dsi-tpg", NULL);
-
-	debugfs_create_file("enable", 0200, d, NULL, &dsi_tpg_enable_fops);
-	return 0;
-}
-late_initcall(dsi_tpg_debugfs_init);
-
 void __init msm_dsi_register(void)
 {
 	DBG("");
