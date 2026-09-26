@@ -29,6 +29,8 @@ struct novatek_nt36536 {
 	struct drm_dsc_config dsc;
 	struct gpio_desc *reset_gpio;
 	struct regulator *vddio;
+	struct regulator *vsp;
+	struct regulator *vsn;
 	struct dentry *dbg_dir;
 };
 
@@ -195,17 +197,68 @@ static int novatek_nt36536_off(struct novatek_nt36536 *ctx)
 	return dsi_ctx.accum_err;
 }
 
+/*
+ * Supply sequence of the XN242 module, taken from the vendor kernel: the panel
+ * power sequence (vddio, then 2 ms; 5 ms before vddio goes off) and the
+ * KTZ8868 bias switching (OUTP, 8 ms, OUTN, 10 ms on the way up; 2 ms, OUTN,
+ * 8 ms, OUTP, 10 ms on the way down).
+ */
+static int novatek_nt36536_power_on(struct novatek_nt36536 *ctx)
+{
+	int ret;
+
+	ret = regulator_enable(ctx->vddio);
+	if (ret < 0)
+		return ret;
+	usleep_range(2000, 3000);
+
+	ret = regulator_enable(ctx->vsp);
+	if (ret < 0)
+		goto err_vddio;
+	usleep_range(8000, 9000);
+
+	ret = regulator_enable(ctx->vsn);
+	if (ret < 0)
+		goto err_vsp;
+	usleep_range(10000, 11000);
+
+	return 0;
+
+err_vsp:
+	regulator_disable(ctx->vsp);
+	usleep_range(10000, 11000);
+err_vddio:
+	usleep_range(5000, 6000);
+	regulator_disable(ctx->vddio);
+
+	return ret;
+}
+
+static void novatek_nt36536_power_off(struct novatek_nt36536 *ctx)
+{
+	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
+	usleep_range(2000, 3000);
+
+	regulator_disable(ctx->vsn);
+	usleep_range(8000, 9000);
+
+	/* 10 ms after OUTP, then the 5 ms the panel needs before vddio goes */
+	regulator_disable(ctx->vsp);
+	usleep_range(15000, 16000);
+
+	regulator_disable(ctx->vddio);
+}
+
 static int novatek_nt36536_prepare(struct drm_panel *panel)
 {
 	struct novatek_nt36536 *ctx = to_novatek_nt36536(panel);
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = ctx->dsi[1] };
 	int ret;
 
-	ret = regulator_enable(ctx->vddio);
+	ret = novatek_nt36536_power_on(ctx);
 	if (ret < 0)
 		return ret;
 
-	usleep_range(2000, 3000);
 	novatek_nt36536_reset(ctx);
 
 	/*
@@ -227,8 +280,7 @@ static int novatek_nt36536_prepare(struct drm_panel *panel)
 	return 0;
 
 err:
-	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
-	regulator_disable(ctx->vddio);
+	novatek_nt36536_power_off(ctx);
 
 	return ret;
 }
@@ -243,9 +295,7 @@ static int novatek_nt36536_unprepare(struct drm_panel *panel)
 	if (ret < 0)
 		dev_err(dev, "failed to off panel: %d\n", ret);
 
-	gpiod_set_value_cansleep(ctx->reset_gpio, 1);
-	usleep_range(5000, 6000);
-	regulator_disable(ctx->vddio);
+	novatek_nt36536_power_off(ctx);
 
 	return 0;
 }
@@ -370,6 +420,16 @@ static int novatek_nt36536_probe(struct mipi_dsi_device *dsi)
 	if (IS_ERR(ctx->vddio))
 		return dev_err_probe(dev, PTR_ERR(ctx->vddio),
 				     "failed to get vddio regulator\n");
+
+	ctx->vsp = devm_regulator_get(dev, "vsp");
+	if (IS_ERR(ctx->vsp))
+		return dev_err_probe(dev, PTR_ERR(ctx->vsp),
+				     "failed to get vsp regulator\n");
+
+	ctx->vsn = devm_regulator_get(dev, "vsn");
+	if (IS_ERR(ctx->vsn))
+		return dev_err_probe(dev, PTR_ERR(ctx->vsn),
+				     "failed to get vsn regulator\n");
 
 	ctx->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(ctx->reset_gpio))
