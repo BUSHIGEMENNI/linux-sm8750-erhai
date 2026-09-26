@@ -263,6 +263,20 @@
 		regulator-boot-on;
 	};
 
+	thermal-zones {
+		gpio2-thermal {
+			thermal-sensors = <&pmk8550_adc 0x149>;
+		};
+
+		skin-thermal {
+			thermal-sensors = <&pmk8550_adc 0x144>;
+		};
+
+		xo-thermal {
+			thermal-sensors = <&pmk8550_adc 0x44>;
+		};
+	};
+
 	vph_pwr: vph-pwr-regulator {
 		compatible = "regulator-fixed";
 
@@ -1073,6 +1087,7 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 		#io-channel-cells = <1>;
+		#thermal-sensor-cells = <1>;
 
 		channel@3 {
 			reg = <0x3>;
@@ -1086,6 +1101,7 @@
 			qcom,pre-scaling = <1 1>;
 			qcom,ratiometric;
 			qcom,hw-settle-time = <200>;
+			qcom,adc-tm;
 		};
 
 		channel@103 {
@@ -1100,6 +1116,7 @@
 			qcom,pre-scaling = <1 1>;
 			qcom,ratiometric;
 			qcom,hw-settle-time = <200>;
+			qcom,adc-tm;
 		};
 
 		channel@149 {
@@ -1108,6 +1125,7 @@
 			qcom,pre-scaling = <1 1>;
 			qcom,ratiometric;
 			qcom,hw-settle-time = <200>;
+			qcom,adc-tm;
 		};
 	};
 };
