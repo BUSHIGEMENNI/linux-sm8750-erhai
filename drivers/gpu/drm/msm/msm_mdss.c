@@ -24,17 +24,6 @@
 
 #define MIN_IB_BW	400000000UL /* Min ib vote 400MB */
 
-/*
- * TEMP(erhai D31/D35 E3a): keep the MDSS clocks and interconnect votes over a
- * runtime suspend while the power domain still collapses, to test whether the
- * state lost across an MDSS GDSC collapse depends on the clocks and bus votes
- * going away with it.  Only the kernel command line sets it (the driver is
- * built in): msm_mdss.temp_keep_clocks_on_suspend=1.  Remove once E3 is judged.
- */
-static bool temp_keep_clocks_on_suspend;
-__module_param_call("msm_mdss.", temp_keep_clocks_on_suspend, &param_ops_bool,
-		    &temp_keep_clocks_on_suspend, 0444, -1, 0);
-
 struct msm_mdss_data {
 	u32 reg_bus_bw;
 };
@@ -55,7 +44,6 @@ struct msm_mdss {
 	struct icc_path *mdp_path[2];
 	u32 num_mdp_paths;
 	struct icc_path *reg_bus_path;
-	bool temp_clocks_kept;
 };
 
 static int msm_mdss_parse_data_bus_icc_path(struct device *dev,
@@ -444,12 +432,6 @@ static int __maybe_unused mdss_runtime_suspend(struct device *dev)
 
 	DBG("");
 
-	if (temp_keep_clocks_on_suspend) {
-		mdss->temp_clocks_kept = true;
-		dev_info(dev, "TEMP E3a: suspend keeps the MDSS clocks and bus votes\n");
-		return 0;
-	}
-
 	return msm_mdss_disable(mdss);
 }
 
@@ -458,16 +440,6 @@ static int __maybe_unused mdss_runtime_resume(struct device *dev)
 	struct msm_mdss *mdss = dev_get_drvdata(dev);
 
 	DBG("");
-
-	/*
-	 * TEMP(erhai E3a): the clocks and votes stayed on through the collapse;
-	 * drop them only now, with the domain back up, so that the enable below
-	 * balances them and programs the UBWC registers the collapse cleared.
-	 */
-	if (mdss->temp_clocks_kept) {
-		mdss->temp_clocks_kept = false;
-		msm_mdss_disable(mdss);
-	}
 
 	return msm_mdss_enable(mdss);
 }
