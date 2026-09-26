@@ -14,9 +14,10 @@ description: |
   led backlight with dual lcd bias power.
   https://www.kinet-ic.com/ktz8866/
 
-  The KTZ8868 is register compatible with the KTZ8866. Besides the HWEN pin,
-  KTZ8868 designs can additionally wire ENP and ENN pins to enable the lcd
-  bias outputs, hence up to three enable GPIOs.
+  The KTZ8868 is register compatible with the KTZ8866. Its LCD bias outputs
+  OUTP and OUTN are switched by the ENP and ENN pins. A board that wires those
+  pins describes the outputs as the outp and outn regulators, so that the
+  panel they supply can sequence them with its other supplies.
 
   Without a led child node the chip registers a backlight device. A KTZ8868
   may instead describe its LED string in a led child node, which the chip
@@ -33,6 +34,8 @@ allOf:
     then:
       properties:
         led: false
+        outn: false
+        outp: false
   - if:
       required:
         - led
@@ -60,9 +63,8 @@ properties:
     description: negative boost supply regulator.
 
   enable-gpios:
-    description: GPIOs to enable the backlight (HWEN, and optionally ENP/ENN).
-    minItems: 1
-    maxItems: 3
+    description: GPIO to use to enable/disable the backlight (HWEN pin).
+    maxItems: 1
 
   current-num-sinks:
     description:
@@ -84,7 +86,10 @@ properties:
     enum: [0, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384]
 
   kinetic,enable-lcd-bias:
-    description: Set if we want to output bias power supply for LCD.
+    description:
+      Set if we want to output bias power supply for LCD. On the KTZ8868 this
+      configures the bias section to follow the ENP and ENN pins; the outputs
+      are then turned on and off through the outp and outn regulators.
     type: boolean
 
   led:
@@ -107,6 +112,27 @@ properties:
 
     required:
       - led-sources
+
+patternProperties:
+  "^out[np]$":
+    type: object
+    $ref: /schemas/regulator/regulator.yaml#
+    unevaluatedProperties: false
+    description:
+      LCD bias output, OUTP (positive) or OUTN (negative), switched on and
+      off by its enable pin.
+
+    properties:
+      enable-gpios:
+        description: GPIO connected to the ENP (outp) or ENN (outn) pin.
+        maxItems: 1
+
+    required:
+      - enable-gpios
+
+dependencies:
+  outn: [ 'kinetic,enable-lcd-bias' ]
+  outp: [ 'kinetic,enable-lcd-bias' ]
 
 required:
   - compatible
@@ -146,11 +172,22 @@ examples:
             compatible = "kinetic,ktz8868";
             reg = <0x11>;
             enable-gpios = <&tlmm 15 GPIO_ACTIVE_HIGH>;
+            kinetic,enable-lcd-bias;
 
             led {
                 function = LED_FUNCTION_BACKLIGHT;
                 color = <LED_COLOR_ID_WHITE>;
                 led-sources = <0 1 2 4 5>;
+            };
+
+            outn {
+                regulator-name = "lcd_vsn";
+                enable-gpios = <&tlmm 14 GPIO_ACTIVE_HIGH>;
+            };
+
+            outp {
+                regulator-name = "lcd_vsp";
+                enable-gpios = <&tlmm 111 GPIO_ACTIVE_HIGH>;
             };
         };
     };
