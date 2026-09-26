@@ -9,6 +9,7 @@
 #include <dt-bindings/interrupt-controller/irq.h>
 #include <dt-bindings/leds/common.h>
 #include <dt-bindings/regulator/qcom,rpmh-regulator.h>
+#include <dt-bindings/thermal/thermal.h>
 #include "sm8750.dtsi"
 #include "pm8550.dtsi"
 #define PMK8550VE_SID 8
@@ -272,8 +273,72 @@
 			thermal-sensors = <&pmk8550_adc 0x144>;
 		};
 
+		/*
+		 * Trips and actions follow the stock sys-therm-0 zone on the
+		 * same thermistor (C.34 dtbo, qcom/sun-pmic-overlay.dtsi and
+		 * qcom/sun-thermal-overlay.dtsi). At 88 C stock pauses CPUs 2-7,
+		 * caps the GPU at power level 5 and mitigates the CDSP; at 90 C
+		 * it also offlines CPUs 3-7 and mitigates the modem. Mainline
+		 * has no CPU pause/hotplug or CDSP/modem cooling devices here,
+		 * so both trips throttle the two CPU frequency domains instead.
+		 * GPU cooling state 5 is the same 734 MHz level as stock, the
+		 * speed bin having the same 14 levels on both kernels.
+		 */
 		xo-thermal {
+			polling-delay-passive = <5000>;
+
 			thermal-sensors = <&pmk8550_adc 0x44>;
+
+			trips {
+				xo_alert0: trip-point0 {
+					temperature = <88000>;
+					hysteresis = <8000>;
+					type = "passive";
+				};
+
+				xo_alert1: trip-point1 {
+					temperature = <90000>;
+					hysteresis = <10000>;
+					type = "passive";
+				};
+
+				trip-point2 {
+					temperature = <100000>;
+					hysteresis = <0>;
+					type = "hot";
+				};
+			};
+
+			cooling-maps {
+				map0 {
+					trip = <&xo_alert0>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+
+				map1 {
+					trip = <&xo_alert0>;
+					cooling-device = <&gpu 5 THERMAL_NO_LIMIT>;
+				};
+
+				map2 {
+					trip = <&xo_alert1>;
+					cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+				};
+			};
 		};
 	};
 
