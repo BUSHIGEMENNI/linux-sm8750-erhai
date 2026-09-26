@@ -33,22 +33,6 @@ struct novatek_nt36536 {
 	bool initialised;
 };
 
-/*
- * TEMP(erhai): with this set, prepare and unprepare ignore the initialised
- * fast path below and run their full sequences again: unprepare sends the
- * off commands and asserts reset, prepare resets the panel and sends the
- * on commands.  It exists to tell whether that re-initialisation survives
- * a blank with the MDSS power domain kept up and fails only once the domain
- * collapses.  Off by default and read-only at run time: it is set on the
- * kernel command line (panel_novatek_nt36536.temp_force_reinit=1), so it
- * cannot change between an unprepare and the prepare that pairs with it.
- * Drop once that experiment has been read.
- */
-static bool temp_force_reinit;
-module_param_named(temp_force_reinit, temp_force_reinit, bool, 0444);
-MODULE_PARM_DESC(temp_force_reinit,
-		 "TEMP: re-initialise the panel on every prepare (default: off)");
-
 static inline struct novatek_nt36536 *to_novatek_nt36536(struct drm_panel *panel)
 {
 	return container_of(panel, struct novatek_nt36536, panel);
@@ -256,7 +240,7 @@ static int novatek_nt36536_prepare(struct drm_panel *panel)
 	 * to be initialised again, so this has to go when either the supply
 	 * sequencing or the command DMA is fixed.
 	 */
-	if (ctx->initialised && !temp_force_reinit)
+	if (ctx->initialised)
 		return 0;
 
 	usleep_range(2000, 3000);
@@ -302,7 +286,7 @@ static int novatek_nt36536_unprepare(struct drm_panel *panel)
 	 * deliver a second time.  The rails stay up either way, so nothing is
 	 * saved by asking.
 	 */
-	if (ctx->initialised && !temp_force_reinit)
+	if (ctx->initialised)
 		return 0;
 
 	ret = novatek_nt36536_off(ctx);
