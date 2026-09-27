@@ -5,6 +5,7 @@
  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 #include <linux/auxiliary_bus.h>
+#include <linux/debugfs.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/nvmem-consumer.h>
@@ -32,6 +33,8 @@ enum qcom_battmgr_variant {
 #define QCOM_BATTMGR_QUIRK_NO_BATT_POWER_NOW		BIT(1)
 /* The charge control opcode and properties mean something else */
 #define QCOM_BATTMGR_QUIRK_NO_CHARGE_CONTROL		BIT(2)
+/* Battery property 25 set requests a fixed USB PD source voltage in mV */
+#define QCOM_BATTMGR_QUIRK_PD_VOLTAGE_REQUEST		BIT(3)
 
 #define BATTMGR_BAT_STATUS		0x1
 
@@ -80,6 +83,8 @@ enum qcom_battmgr_variant {
 #define BATT_CHG_CTRL_EN		24
 #define BATT_CHG_CTRL_START_THR		25
 #define BATT_CHG_CTRL_END_THR		26
+/* OPLUS firmware: the same number set with BATTMGR_BAT_PROPERTY_SET */
+#define BATT_OPLUS_SET_PDO		25
 
 #define BATTMGR_USB_PROPERTY_GET	0x32
 #define BATTMGR_USB_PROPERTY_SET	0x33
@@ -346,6 +351,13 @@ struct qcom_battmgr {
 	 * firmware, as it then stops responding.
 	 */
 	struct mutex lock;
+
+	/* Result code of the last BATTMGR_BAT_PROPERTY_SET response */
+	u32 set_result;
+	/* Voltage of the last accepted PD request in mV, 0 if none */
+	u32 pd_request_mv;
+	int pd_request_ret;
+	struct dentry *debugfs;
 };
 
 static int qcom_battmgr_request(struct qcom_battmgr *battmgr, void *data, size_t len)
@@ -1577,6 +1589,18 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
 	case BATTMGR_CHG_CTRL_LIMIT_EN:
 		battmgr->error = 0;
 		break;
+	case BATTMGR_BAT_PROPERTY_SET:
+		if (payload_len != sizeof(resp->intval)) {
+			dev_warn(battmgr->dev,
+				 "invalid payload length for property set: %zd\n",
+				 payload_len);
+			battmgr->error = -ENODATA;
+			break;
+		}
+
+		battmgr->set_result = le32_to_cpu(resp->intval.result);
+		battmgr->error = battmgr->set_result ? -EREMOTEIO : 0;
+		break;
 	default:
 		dev_warn(battmgr->dev, "unknown message %#x\n", opcode);
 		break;
@@ -1625,7 +1649,157 @@ static void qcom_battmgr_pdr_notify(void *priv, int state)
 		schedule_work(&battmgr->enable_work);
 	} else {
 		battmgr->service_up = false;
+		/* A restarted charger starts over from its default contract */
+		battmgr->pd_request_mv = 0;
 	}
+}
+
+/*
+ * Experimental: ask the OnePlus Pad 2 Pro charger firmware for a 9 V USB PD
+ * contract, the way the vendor kernel does, and back to 5 V.  This is a
+ * debugfs knob for a bounded test, not an interface: nothing sends the
+ * request by itself.
+ */
+struct qcom_battmgr_pd_source {
+	struct device *glink;
+	struct device *self;
+	bool found;
+	int online;
+	int usb_type;
+	int voltage_max;
+};
+
+static int qcom_battmgr_pd_source_match(struct power_supply *psy, void *data)
+{
+	struct qcom_battmgr_pd_source *src = data;
+	struct device *parent = psy->dev.parent;
+	union power_supply_propval val;
+
+	/* The UCSI port supply lives on a sibling pmic_glink auxiliary device */
+	if (!parent || parent == src->self || parent->parent != src->glink ||
+	    psy->desc->type != POWER_SUPPLY_TYPE_USB)
+		return 0;
+
+	if (power_supply_get_property(psy, POWER_SUPPLY_PROP_ONLINE, &val))
+		return 0;
+	src->online = val.intval;
+
+	if (power_supply_get_property(psy, POWER_SUPPLY_PROP_USB_TYPE, &val))
+		return 0;
+	src->usb_type = val.intval;
+
+	if (power_supply_get_property(psy, POWER_SUPPLY_PROP_VOLTAGE_MAX, &val))
+		return 0;
+	src->voltage_max = val.intval;
+
+	src->found = true;
+
+	return 1;
+}
+
+static int qcom_battmgr_pd_request(struct qcom_battmgr *battmgr, u32 mv)
+{
+	struct qcom_battmgr_pd_source src = {
+		.glink = battmgr->dev->parent,
+		.self = battmgr->dev,
+	};
+	int ret;
+
+	if (!battmgr->service_up)
+		return -EAGAIN;
+
+	power_supply_for_each_psy(&src, qcom_battmgr_pd_source_match);
+
+	/* Only raise the voltage on a PD sink whose source offers 9 V */
+	if (mv > 5000) {
+		if (!src.found) {
+			dev_info(battmgr->dev, "PD %u mV request refused: no UCSI supply\n", mv);
+			return -ENODEV;
+		}
+
+		if (src.online != 1 || src.usb_type != POWER_SUPPLY_USB_TYPE_PD ||
+		    src.voltage_max < mv * 1000) {
+			dev_info(battmgr->dev,
+				 "PD %u mV request refused: online %d, usb_type %d, source max %d uV\n",
+				 mv, src.online, src.usb_type, src.voltage_max);
+			return -EOPNOTSUPP;
+		}
+	}
+
+	mutex_lock(&battmgr->lock);
+	battmgr->set_result = 0;
+	ret = qcom_battmgr_request_property(battmgr, BATTMGR_BAT_PROPERTY_SET,
+					    BATT_OPLUS_SET_PDO, mv);
+	battmgr->pd_request_ret = ret;
+	if (!ret)
+		battmgr->pd_request_mv = mv;
+	mutex_unlock(&battmgr->lock);
+
+	dev_info(battmgr->dev,
+		 "PD %u mV request: %d (firmware result %u, UCSI online %d, usb_type %d, source max %d uV)\n",
+		 mv, ret, battmgr->set_result, src.online, src.usb_type,
+		 src.voltage_max);
+
+	return ret;
+}
+
+static ssize_t qcom_battmgr_pd_mv_read(struct file *file, char __user *buf,
+				       size_t count, loff_t *ppos)
+{
+	struct qcom_battmgr *battmgr = file->private_data;
+	char text[32];
+	int len;
+
+	len = scnprintf(text, sizeof(text), "%u %d\n", battmgr->pd_request_mv,
+			battmgr->pd_request_ret);
+
+	return simple_read_from_buffer(buf, count, ppos, text, len);
+}
+
+static ssize_t qcom_battmgr_pd_mv_write(struct file *file, const char __user *buf,
+					size_t count, loff_t *ppos)
+{
+	struct qcom_battmgr *battmgr = file->private_data;
+	u32 mv;
+	int ret;
+
+	ret = kstrtou32_from_user(buf, count, 10, &mv);
+	if (ret)
+		return ret;
+
+	/* The vendor kernel caps PD charging of this tablet at 9 V */
+	if (mv != 5000 && mv != 9000)
+		return -EINVAL;
+
+	ret = qcom_battmgr_pd_request(battmgr, mv);
+
+	return ret ? ret : count;
+}
+
+static const struct file_operations qcom_battmgr_pd_mv_fops = {
+	.owner = THIS_MODULE,
+	.open = simple_open,
+	.read = qcom_battmgr_pd_mv_read,
+	.write = qcom_battmgr_pd_mv_write,
+	.llseek = default_llseek,
+};
+
+static void qcom_battmgr_debugfs_remove(void *data)
+{
+	debugfs_remove_recursive(data);
+}
+
+static int qcom_battmgr_debugfs_init(struct qcom_battmgr *battmgr)
+{
+	if (!(battmgr->quirks & QCOM_BATTMGR_QUIRK_PD_VOLTAGE_REQUEST))
+		return 0;
+
+	battmgr->debugfs = debugfs_create_dir("qcom_battmgr", NULL);
+	debugfs_create_file("pd_voltage_mv", 0600, battmgr->debugfs, battmgr,
+			    &qcom_battmgr_pd_mv_fops);
+
+	return devm_add_action_or_reset(battmgr->dev, qcom_battmgr_debugfs_remove,
+					battmgr->debugfs);
 }
 
 static const struct of_device_id qcom_battmgr_of_variants[] = {
@@ -1648,7 +1822,8 @@ static const struct of_device_id qcom_battmgr_of_quirks[] = {
 		.compatible = "oneplus,pad2pro-pmic-glink",
 		.data = (void *)(QCOM_BATTMGR_QUIRK_BATT_CURRENT_INVERTED |
 				 QCOM_BATTMGR_QUIRK_NO_BATT_POWER_NOW |
-				 QCOM_BATTMGR_QUIRK_NO_CHARGE_CONTROL),
+				 QCOM_BATTMGR_QUIRK_NO_CHARGE_CONTROL |
+				 QCOM_BATTMGR_QUIRK_PD_VOLTAGE_REQUEST),
 	},
 	{}
 };
@@ -1715,6 +1890,7 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
 		return -ENOMEM;
 
 	battmgr->dev = dev;
+	auxiliary_set_drvdata(adev, battmgr);
 
 	psy_cfg.drv_data = battmgr;
 	psy_cfg.fwnode = dev_fwnode(&adev->dev);
@@ -1812,7 +1988,16 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
 
 	pmic_glink_client_register(battmgr->client);
 
-	return 0;
+	return qcom_battmgr_debugfs_init(battmgr);
+}
+
+static void qcom_battmgr_shutdown(struct auxiliary_device *adev)
+{
+	struct qcom_battmgr *battmgr = auxiliary_get_drvdata(adev);
+
+	/* Drop a raised contract before the reboot, as the vendor kernel does */
+	if (battmgr && battmgr->pd_request_mv > 5000)
+		qcom_battmgr_pd_request(battmgr, 5000);
 }
 
 static const struct auxiliary_device_id qcom_battmgr_id_table[] = {
@@ -1824,6 +2009,7 @@ MODULE_DEVICE_TABLE(auxiliary, qcom_battmgr_id_table);
 static struct auxiliary_driver qcom_battmgr_driver = {
 	.name = "pmic_glink_power_supply",
 	.probe = qcom_battmgr_probe,
+	.shutdown = qcom_battmgr_shutdown,
 	.id_table = qcom_battmgr_id_table,
 };
 
