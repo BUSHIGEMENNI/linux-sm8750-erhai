@@ -1271,7 +1271,7 @@
 	pinctrl-names = "default";
 
 	touchscreen@0 {
-		compatible = "novatek,nt36536";
+		compatible = "novatek,nt36536-ts";
 		reg = <0>;
 		spi-max-frequency = <12000000>;
 
@@ -1282,12 +1282,15 @@
 		interrupts = <162 IRQ_TYPE_EDGE_FALLING>;
 
 		panel = <&panel>;
-		novatek,irq-gpio = <&tlmm 162 IRQ_TYPE_EDGE_FALLING>;
-		novatek,swrst-n8-addr = <0x1fb43e>;
-		novatek,display-coords = <2400 3392>;
-		/* The IC reports in its portrait frame; the panel scans landscape:
-		 * swap, then mirror the (post-swap) X. Measured on the device:
-		 * left-to-right raises X, top-to-bottom raises Y. */
+
+		/*
+		 * The controller reports in its 2400x3392 portrait frame and
+		 * the panel scans landscape. The controller's X axis is
+		 * mirrored first and the axes are then swapped (the generic
+		 * properties invert before they swap). Measured with the USB
+		 * port on the right: left to right raises X, top to bottom
+		 * raises Y.
+		 */
 		touchscreen-size-x = <2400>;
 		touchscreen-size-y = <3392>;
 		touchscreen-swapped-x-y;
