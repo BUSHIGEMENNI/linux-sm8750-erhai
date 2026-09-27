@@ -1299,9 +1299,13 @@
 		 */
 		touchscreen-size-x = <2400>;
 		touchscreen-size-y = <3392>;
+		/* the 193 x 274 mm active area, along the controller axes */
+		touchscreen-x-mm = <193>;
+		touchscreen-y-mm = <274>;
 		touchscreen-swapped-x-y;
 		touchscreen-inverted-x;
 		firmware-name = "novatek/nt36536-xn242.bin";
+		novatek,pen-support;
 	};
 };
 
