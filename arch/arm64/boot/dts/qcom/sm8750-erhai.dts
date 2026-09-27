@@ -1324,28 +1324,28 @@
 	gpio-reserved-ranges = <36 4>, <74 1>;
 
 	qupv3_se4_spi: qupv3-se4-spi-state {
-		qupv3-se4-spi-miso {
+		miso-pins {
 			pins = "gpio48";
 			function = "qup1_se4";
 			drive-strength = <6>;
 			bias-disable;
 		};
 
-		qupv3-se4-spi-mosi {
+		mosi-pins {
 			pins = "gpio49";
 			function = "qup1_se4";
 			drive-strength = <4>;
 			bias-disable;
 		};
 
-		qupv3-se4-spi-clk {
+		clk-pins {
 			pins = "gpio50";
 			function = "qup1_se4";
 			drive-strength = <6>;
 			bias-disable;
 		};
 
-		qupv3-se4-spi-cs {
+		cs-pins {
 			pins = "gpio51";
 			function = "qup1_se4";
 			drive-strength = <4>;
@@ -1358,7 +1358,6 @@
 		function = "gpio";
 		drive-strength = <8>;
 		bias-disable;
-		input-enable;
 	};
 	wlan_en: wlan-en-state {
 		pins = "gpio16";
