@@ -1583,6 +1583,14 @@
 	status = "okay";
 };
 
+&usb_dp_qmpphy_out {
+	remote-endpoint = <&pmic_glink_ss_in>;
+};
+
+&usb_dwc3_hs {
+	remote-endpoint = <&pmic_glink_hs_in>;
+};
+
 &usb_hsphy {
 	vdd-supply = <&vreg_l2d_0p88>;
 	vdda12-supply = <&vreg_l3g_1p2>;
