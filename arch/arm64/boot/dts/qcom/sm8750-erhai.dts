@@ -1037,6 +1037,12 @@
 	};
 };
 
+&iris {
+	firmware-name = "qcom/sm8750/erhai/vpu35_4v.mbn";
+
+	status = "okay";
+};
+
 &mdss {
 	status = "okay";
 };
