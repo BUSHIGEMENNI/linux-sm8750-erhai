@@ -4686,14 +4686,7 @@ int device_move(struct device *dev, struct device *new_parent,
 
 	pr_debug("device: '%s': %s: moving to '%s'\n", dev_name(dev),
 		 __func__, new_parent ? dev_name(new_parent) : "<NULL>");
-	pr_info("TEMP device_move %s: old=%px/%px new=%px/%px parent=%px/%px refs=%u\n",
-		dev_name(dev), dev->kobj.parent, dev->kobj.parent->sd,
-		new_parent_kobj, new_parent_kobj ? new_parent_kobj->sd : NULL,
-		new_parent ? &new_parent->kobj : NULL,
-		new_parent ? new_parent->kobj.sd : NULL,
-		new_parent_kobj ? kref_read(&new_parent_kobj->kref) : 0);
 	error = kobject_move(&dev->kobj, new_parent_kobj);
-	pr_info("TEMP device_move %s: result=%d\n", dev_name(dev), error);
 	if (error) {
 		cleanup_glue_dir(dev, new_parent_kobj);
 		put_device(new_parent);
