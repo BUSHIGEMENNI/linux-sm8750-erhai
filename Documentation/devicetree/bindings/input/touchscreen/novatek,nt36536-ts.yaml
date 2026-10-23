@@ -7,7 +7,7 @@ $schema: http://devicetree.org/meta-schemas/core.yaml#
 title: Novatek NT36536 touchscreen controller
 
 maintainers:
-  - Erwin <yzddmr7@gmail.com>
+  - yzddmr6 <46088090+yzddmr6@users.noreply.github.com>
 
 description:
   The Novatek NT36536 is a touch and display driver integrated (TDDI)
