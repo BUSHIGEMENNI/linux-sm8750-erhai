@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Novatek NT36536 dual-DSI video mode panel driver
- * Copyright (c) 2026, Erwin
+ * Copyright (c) 2026, yzddmr6
  *
  * Dual-DSI handling based on panel-himax-hx83121a.c
  */
@@ -468,6 +468,6 @@ static struct mipi_dsi_driver novatek_nt36536_driver = {
 };
 module_mipi_dsi_driver(novatek_nt36536_driver);
 
-MODULE_AUTHOR("Erwin <yzddmr7@gmail.com>");
+MODULE_AUTHOR("yzddmr6 <46088090+yzddmr6@users.noreply.github.com>");
 MODULE_DESCRIPTION("Novatek NT36536 dual-DSI video mode panel driver");
 MODULE_LICENSE("GPL");
