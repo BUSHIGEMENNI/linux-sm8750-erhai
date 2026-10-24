@@ -256,6 +256,7 @@ struct pogo_kb {
 	unsigned int rx_sync;
 	unsigned long last_rx;
 	u8 brand;
+	u8 bt_addr[6];
 	struct input_dev *kbd;
 	struct input_dev *tp;
 	u8 keys[8];
@@ -490,10 +491,15 @@ static void pogo_kb_rx_sync(struct pogo_kb *kb, const u8 *data, u8 len)
 
 	if (!kb->kbd) {
 		/* Any sync packet announces a powered keyboard */
-		if (data[0] == POGO_KB_SYNC_POWER_ON && data[1] == POGO_KB_SYNC_FORMAT)
+		if (data[0] == POGO_KB_SYNC_POWER_ON && data[1] == POGO_KB_SYNC_FORMAT) {
 			kb->brand = data[2];
-		else if (heartbeat && len >= 4)
+			if (len >= 9)
+				memcpy(kb->bt_addr, &data[3], sizeof(kb->bt_addr));
+		} else if (heartbeat && len >= 4) {
 			kb->brand = data[3];
+			if (len >= 10)
+				memcpy(kb->bt_addr, &data[4], sizeof(kb->bt_addr));
+		}
 		queue_work(system_freezable_wq, &kb->attach_work);
 		return;
 	}
@@ -1036,6 +1042,23 @@ static void pogo_kb_attach_work(struct work_struct *work)
 	kb->grace_start = jiffies;
 	WRITE_ONCE(kb->led_sent,
 		   kb->grace_start - msecs_to_jiffies(POGO_KB_LED_RESYNC_MS));
+
+	/* The power-on sync and the extended heartbeat carry the address of the
+	 * keyboard's own Bluetooth radio.  Report it so that user space can pair
+	 * with the keyboard and keep using it detached, as the vendor system does.
+	 */
+	{
+		char bt_addr_str[] = "POGO_KB_BT_ADDR=00:00:00:00:00:00";
+		const u8 *a = kb->bt_addr;
+		char *envp[] = { bt_addr_str, NULL };
+
+		snprintf(&bt_addr_str[sizeof("POGO_KB_BT_ADDR=") - 1],
+			 sizeof(bt_addr_str) - sizeof("POGO_KB_BT_ADDR=") + 1,
+			 "%pMR", a);
+		dev_info(kb->dev, "keyboard Bluetooth address %pMR\n", a);
+		kobject_uevent_env(&kb->dev->kobj, KOBJ_CHANGE, envp);
+	}
+
 	pogo_kb_log_version(kb);
 out:
 	mutex_unlock(&kb->lock);
