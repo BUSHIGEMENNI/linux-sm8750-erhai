@@ -11,10 +11,18 @@
  * Register map, IRQ bits, power-on/off sequences and the RX data-frame
  * protocol were reverse engineered from the vendor module
  * oplus_wireless_pen.ko (GPL v2, "Wireless Pen Charger Cps8601") extracted
- * from the stock vendor_dlkm; see ~/erhai-pen/disasm-keyfuncs.txt. The
- * vendor driver continues initialization when the optional SRAM update
- * image is missing, so this port relies on the factory firmware and does
- * not require wireless_pen/0/cps8601_firmware.bin.
+ * from the stock vendor_dlkm; see ~/erhai-pen/disasm-keyfuncs.txt and
+ * ~/erhai-pen/fw-update-notes.md.
+ *
+ * The firmware SRAM update path (vendor fw_update_work_func) is implemented
+ * as well: wireless_pen/<project>/cps8601_firmware.bin is requested, its
+ * header version is compared against the running firmware, and on mismatch
+ * (or with the fw_force module parameter) the embedded bootloader is loaded
+ * into chip SRAM and the image is flashed and verified.  The vendor module
+ * carries the whole machinery but nothing ever schedules it - the factory
+ * image ships the matching version, so the path stays dormant there.  A
+ * missing image or a failed update is not fatal: init keeps going with the
+ * firmware the chip currently runs.
  */
 
 #include <linux/module.h>
@@ -26,6 +34,7 @@
 #include <linux/pm_wakeup.h>
 #include <linux/delay.h>
 #include <linux/completion.h>
+#include <linux/firmware.h>
 #include <linux/mutex.h>
 #include <linux/soc/qcom/pmic_glink.h>
 #include "erhai_otg_glink.h"
@@ -67,6 +76,60 @@ struct cps8601_hboost_msg {
 	u8			reserved[3];
 } __packed;
 
+/*
+ * Firmware SRAM update registers (vendor cps_do_fw_update /
+ * cps_load_bootloader).  These live in a separate address space the chip
+ * only decodes once program mode has been armed, and they are addressed
+ * with 32-bit register addresses - the vendor module keeps a second
+ * regmap_config with reg_bits = 32 just for them while the normal map is
+ * 16-bit.  On the wire both maps are big-endian in the address and the
+ * "word" values go out little-endian over four consecutive registers.
+ */
+#define CPS8601_PROG_EN		0xffffff00	/* program mode gate: 0x0e arm, 0 release */
+#define CPS8601_PROG_KEY	0x40040030	/* flash controller key: 0xffffffff unlock, 0 lock */
+#define CPS8601_PROG_CFG	0x40040070	/* flash controller config, written 0xa061 */
+#define CPS8601_PROG_MODE	0x40040008	/* 0x08 load SRAM, 0x20 boot SRAM, 0x01 run app */
+#define CPS8601_PROG_MASK	0x40040048	/* flash write mask, written 0xfff */
+#define CPS8601_PROG_AUX	0x4000e000	/* written 0 in the entry sequence */
+#define CPS8601_PROG_BOOT_LATCH	0x40040014	/* 1: remap SRAM over flash, 0: back to flash */
+
+#define CPS8601_SRAM_BOOT_BASE	0x20000000	/* bootloader load address */
+#define CPS8601_SRAM_STATUS	0x200009f8	/* boot mailbox status, 4B LE */
+#define CPS8601_SRAM_CMD	0x200009fc	/* boot mailbox command, 4B LE */
+#define CPS8601_SRAM_WINDOW_A	0x20000a00	/* 256B data window A / cmd arg + result */
+#define CPS8601_SRAM_WINDOW_B	0x20000b00	/* 256B data window B */
+
+/* boot mailbox commands (written to CPS8601_SRAM_CMD) */
+#define CPS8601_BOOT_CMD_CRC_SRAM	0xb0	/* CRC the SRAM image, length in window A */
+#define CPS8601_BOOT_CMD_ERASE		0x70	/* erase the flash image */
+#define CPS8601_BOOT_CMD_VERIFY		0x90	/* CRC the flash image, length in window A */
+#define CPS8601_BOOT_CMD_COMMIT		0x80	/* flash the verified image */
+#define CPS8601_BOOT_CMD_PUT_A		0x10	/* flash data window A */
+#define CPS8601_BOOT_CMD_PUT_B		0x20	/* flash data window B */
+
+/* CPS8601_SRAM_STATUS (byte0 & 0xf0): 0x10 busy, 0x20 done, 0x30/0x40 error */
+#define CPS8601_BOOT_ST_BUSY		0x10
+#define CPS8601_BOOT_ST_DONE		0x20
+
+#define CPS8601_FW_RETRIES		5	/* vendor retry count, update and request alike */
+#define CPS8601_FW_BIN_VER_OFF		0xc4	/* image header: big-endian version */
+#define CPS8601_FW_BLOCK		0x100	/* SRAM window / flash block size */
+
+/* the serial bootloader, extracted verbatim from the vendor module
+ * (oplus_wireless_pen.ko .data, symbol cps8601_bl) */
+#include "cps8601_bl.h"
+
+static bool fw_force;
+module_param(fw_force, bool, 0644);
+MODULE_PARM_DESC(fw_force,
+	"reflash the pen charger firmware even if the version matches (unbrick switch)");
+
+/* vendor get_project(): stock image ships wireless_pen/24976/ on erhai */
+static unsigned int fw_project_id = 24976;
+module_param(fw_project_id, uint, 0444);
+MODULE_PARM_DESC(fw_project_id,
+	"project id used in the wireless_pen/<id>/cps8601_firmware.bin path");
+
 /* IRQ status bits (reg 0x07-0x08), from the vendor handler bit tests */
 #define CPS8601_IRQ_Q_CALI		BIT(0)
 #define CPS8601_IRQ_PING_OK		BIT(2)
@@ -83,6 +146,9 @@ struct cps8601_hboost_msg {
 struct cps8601 {
 	struct i2c_client	*client;
 	struct regmap		*regmap;
+	/* program-mode map, 32-bit register addresses (fw update only) */
+	struct regmap		*progmap;
+	struct mutex		prog_lock;
 	struct device		*dev;
 
 	struct gpio_desc	*int_gpiod;
@@ -206,6 +272,359 @@ static int cps8601_write16(struct cps8601 *chip, u16 reg, u16 val)
 	return regmap_write(chip->regmap, reg + 1, val >> 8);
 }
 
+/* ---- firmware SRAM update (vendor fw_update_work_func) ---- */
+
+/* 32-bit "word" values go out little-endian over four consecutive
+ * registers, exactly like the vendor raw-writes a stack slot */
+static int cps8601_prog_write_word(struct cps8601 *chip, u32 reg, u32 val)
+{
+	u8 buf[4] = { val, val >> 8, val >> 16, val >> 24 };
+
+	return regmap_raw_write(chip->progmap, reg, buf, sizeof(buf));
+}
+
+static int cps8601_prog_read_word(struct cps8601 *chip, u32 reg, u32 *val)
+{
+	u8 buf[4];
+	int ret;
+
+	ret = regmap_raw_read(chip->progmap, reg, buf, sizeof(buf));
+	if (ret)
+		return ret;
+	*val = buf[0] | buf[1] << 8 | buf[2] << 16 | buf[3] << 24;
+	return 0;
+}
+
+/* SRAM data writes are capped at 32 bytes per i2c burst
+ * (vendor cps_wls_program_sram) */
+static int cps8601_prog_write_sram(struct cps8601 *chip, u32 addr,
+				   const u8 *buf, size_t len)
+{
+	int ret;
+
+	while (len > 32) {
+		ret = regmap_raw_write(chip->progmap, addr, buf, 32);
+		if (ret)
+			return ret;
+		addr += 32;
+		buf += 32;
+		len -= 32;
+	}
+	return regmap_raw_write(chip->progmap, addr, buf, len);
+}
+
+/*
+ * Poll the boot mailbox status until the command completes: 0x10 keeps
+ * working, 0x20 means done, anything else is a failure (vendor
+ * cps_wls_program_wait_cmd_done, ~3 s of 1 ms polls).
+ */
+static int cps8601_boot_wait_done(struct cps8601 *chip)
+{
+	int tries = 3001;
+
+	while (tries--) {
+		u32 st = 0;
+		int ret;
+
+		ret = cps8601_prog_read_word(chip, CPS8601_SRAM_STATUS, &st);
+		if (ret)
+			return ret;
+		st &= 0xf0;
+		if (st == CPS8601_BOOT_ST_DONE)
+			return 0;
+		if (st != CPS8601_BOOT_ST_BUSY) {
+			dev_warn(chip->dev, "boot cmd failed, status %#x\n", st);
+			return -EIO;
+		}
+		msleep(1);
+	}
+	dev_warn(chip->dev, "boot cmd timeout\n");
+	return -ETIMEDOUT;
+}
+
+/*
+ * CRC-16, poly 0x1021, init 0, MSB first, no final xor.  This is the
+ * bit-exact algorithm both the vendor update path and the chip's
+ * bootloader use; crc_ccitt() uses a reflected table with the same
+ * parameters but the init value mapping differs, so keep the plain loop.
+ */
+static u16 cps8601_crc16(const u8 *buf, size_t len)
+{
+	u16 crc = 0;
+	size_t i;
+	int b;
+
+	for (i = 0; i < len; i++) {
+		crc ^= (u16)buf[i] << 8;
+		for (b = 0; b < 8; b++) {
+			if (crc & 0x8000)
+				crc = (crc << 1) ^ 0x1021;
+			else
+				crc <<= 1;
+		}
+	}
+	return crc;
+}
+
+/*
+ * MCU reset into boot mode and bootloader download (vendor
+ * cps_load_bootloader): arm program mode, unlock the flash controller,
+ * push the bootloader into SRAM, latch it over flash and let the MCU
+ * boot it.  The bootloader verifies itself first: its CRC over the loaded
+ * image must match the host's, then it answers mailbox commands.
+ */
+static int cps8601_load_bootloader(struct cps8601 *chip)
+{
+	size_t bl_len = sizeof(cps8601_bl_blob);
+	u32 crc = 0;
+	int ret;
+
+	ret = cps8601_prog_write_word(chip, CPS8601_PROG_EN, 0x0e);
+	if (ret)
+		return ret;
+	msleep(110);
+	ret = cps8601_prog_write_word(chip, CPS8601_PROG_KEY, 0xffffffff);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_CFG, 0xa061);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_MODE, 0x08);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_AUX, 0);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_MASK, 0xfff);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_KEY, 0);
+	if (ret)
+		return ret;
+
+	ret = cps8601_prog_write_sram(chip, CPS8601_SRAM_BOOT_BASE,
+				      cps8601_bl_blob, bl_len);
+	if (ret)
+		return ret;
+
+	/* latch SRAM over flash and reset the MCU into the bootloader */
+	ret = cps8601_prog_write_word(chip, CPS8601_PROG_KEY, 0xffffffff);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_BOOT_LATCH, 1);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_MODE, 0x20);
+	if (ret)
+		return ret;
+	msleep(10);
+
+	/* re-arm program mode: the MCU reset cleared the gate */
+	ret = cps8601_prog_write_word(chip, CPS8601_PROG_EN, 0x0e);
+	if (ret)
+		return ret;
+	msleep(110);
+	ret = cps8601_prog_write_word(chip, CPS8601_PROG_KEY, 0xffffffff);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_CFG, 0xa061);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_SRAM_WINDOW_A, bl_len);
+	ret = ret ?: cps8601_prog_write_word(chip, CPS8601_SRAM_CMD,
+					     CPS8601_BOOT_CMD_CRC_SRAM);
+	ret = ret ?: cps8601_boot_wait_done(chip);
+	if (ret)
+		return ret;
+	ret = cps8601_prog_read_word(chip, CPS8601_SRAM_WINDOW_A, &crc);
+	if (ret)
+		return ret;
+	if (crc != cps8601_crc16(cps8601_bl_blob, bl_len)) {
+		dev_warn(chip->dev, "bootloader crc mismatch (%#x)\n", crc);
+		return -EIO;
+	}
+	return 0;
+}
+
+/*
+ * Flash one firmware image.  Caller holds chip->prog_lock.  Every failure
+ * restarts the whole sequence from the bootloader download, like the
+ * vendor retry loop.
+ */
+static int cps8601_do_fw_update(struct cps8601 *chip, const u8 *fw,
+				size_t fw_size)
+{
+	int retry;
+
+	if (fw_size < CPS8601_FW_BLOCK)
+		return -EINVAL;
+
+	for (retry = 0; retry < CPS8601_FW_RETRIES; retry++) {
+		size_t off;
+		u32 crc = 0;
+		u16 host_crc;
+		int ret;
+
+		ret = cps8601_load_bootloader(chip);
+		if (ret) {
+			dev_warn(chip->dev,
+				 "bootloader load failed (try %d): %d\n",
+				 retry + 1, ret);
+			continue;
+		}
+
+		/* erase, then stream the image through the two SRAM windows:
+		 * each window is written while the bootloader is still busy
+		 * flashing the other one, double-buffered */
+		ret = cps8601_prog_write_word(chip, CPS8601_PROG_EN, 0x0e);
+		if (ret)
+			continue;
+		msleep(110);
+		ret = cps8601_prog_write_word(chip, CPS8601_PROG_KEY,
+					      0xffffffff);
+		ret = ret ?: cps8601_prog_write_word(chip, CPS8601_SRAM_CMD,
+						CPS8601_BOOT_CMD_ERASE);
+		if (ret)
+			continue;
+		msleep(10);
+		ret = cps8601_boot_wait_done(chip);
+		if (ret)
+			continue;
+
+		for (off = 0; off < fw_size; off += CPS8601_FW_BLOCK) {
+			size_t n = min_t(size_t, CPS8601_FW_BLOCK,
+					 fw_size - off);
+			bool win_b = off & CPS8601_FW_BLOCK;
+
+			ret = cps8601_prog_write_sram(chip,
+					win_b ? CPS8601_SRAM_WINDOW_B :
+						CPS8601_SRAM_WINDOW_A,
+					fw + off, n);
+			if (ret)
+				break;
+			/* the window just written is only handed over once
+			 * the previous flash command finished; block 0 goes
+			 * out immediately after the erase */
+			if (off) {
+				ret = cps8601_boot_wait_done(chip);
+				if (ret)
+					break;
+			}
+			ret = cps8601_prog_write_word(chip, CPS8601_SRAM_CMD,
+					win_b ? CPS8601_BOOT_CMD_PUT_B :
+						CPS8601_BOOT_CMD_PUT_A);
+			if (ret)
+				break;
+		}
+		if (ret)
+			continue;
+		ret = cps8601_boot_wait_done(chip);
+		if (ret)
+			continue;
+
+		/* verify: the bootloader CRCs what it flashed, the host
+		 * compares against its own CRC over the image (vendor
+		 * cps_do_fw_update) */
+		ret = cps8601_prog_write_word(chip, CPS8601_SRAM_WINDOW_A,
+					      fw_size);
+		ret = ret ?: cps8601_prog_write_word(chip, CPS8601_SRAM_CMD,
+						CPS8601_BOOT_CMD_VERIFY);
+		ret = ret ?: cps8601_boot_wait_done(chip);
+		if (ret)
+			continue;
+		host_crc = cps8601_crc16(fw, fw_size);
+		ret = cps8601_prog_read_word(chip, CPS8601_SRAM_WINDOW_A,
+					     &crc);
+		if (ret)
+			continue;
+		if (crc != host_crc) {
+			dev_warn(chip->dev,
+				 "verify failed: chip %#x, host %#x\n",
+				 crc, host_crc);
+			continue;
+		}
+
+		/* commit, then release the MCU back into the application:
+		 * unlock, run-app mode, drop the boot latch, lock and leave
+		 * program mode (vendor exit sequence) */
+		ret = cps8601_prog_write_word(chip, CPS8601_SRAM_CMD,
+						CPS8601_BOOT_CMD_COMMIT);
+		ret = ret ?: cps8601_boot_wait_done(chip);
+		if (ret)
+			continue;
+		ret = cps8601_prog_write_word(chip, CPS8601_PROG_EN, 0x0e);
+		if (ret)
+			continue;
+		msleep(100);
+		ret = cps8601_prog_write_word(chip, CPS8601_PROG_KEY,
+					      0xffffffff);
+		ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_CFG,
+						     0xa061);
+		ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_MODE,
+						     0x01);
+		ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_CFG, 0);
+		ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_KEY, 0);
+		ret = ret ?: cps8601_prog_write_word(chip, CPS8601_PROG_EN, 0);
+		if (ret)
+			continue;
+		return 0;
+	}
+	return -EIO;
+}
+
+/*
+ * Vendor entry point (fw_update_work_func head): fetch the image, compare
+ * the header version against the running firmware and reflash on
+ * mismatch.  Everything here is best-effort: a missing image or a failed
+ * update just leaves the chip with its current firmware.
+ */
+static void cps8601_fw_update_check(struct cps8601 *chip)
+{
+	const struct firmware *fw = NULL;
+	char path[64];
+	u16 bin_ver, sys_ver = 0;
+	int ret = -ENOENT, tries;
+
+	snprintf(path, sizeof(path), "wireless_pen/%u/cps8601_firmware.bin",
+		 fw_project_id);
+
+	/* the vendor requests the image five times: during early probe the
+	 * firmware usermode helper can lose the race */
+	for (tries = 0; tries < CPS8601_FW_RETRIES; tries++) {
+		release_firmware(fw);
+		ret = request_firmware(&fw, path, chip->dev);
+		if (!ret)
+			break;
+		fw = NULL;
+	}
+	if (ret) {
+		dev_info(chip->dev,
+			 "%s missing, keeping factory firmware\n", path);
+		return;
+	}
+
+	if (fw->size < CPS8601_FW_BIN_VER_OFF + 2) {
+		dev_warn(chip->dev, "%s too short (%zu)\n", path, fw->size);
+		goto out;
+	}
+
+	/* image header: big-endian version at 0xc4..0xc5 (0x011e on the
+	 * shipped image); the MCU reports the same version as a
+	 * little-endian word at reg 0x02 */
+	bin_ver = (fw->data[CPS8601_FW_BIN_VER_OFF] << 8) |
+		  fw->data[CPS8601_FW_BIN_VER_OFF + 1];
+	cps8601_read16(chip, CPS8601_REG_FW_VER, &sys_ver);
+
+	/* vendor handshake: the INT pin is driven high while the update
+	 * session runs (cps_set_gpio_value(chip, 0, 1)); the stock module
+	 * then waits on a completion nothing ever signals, so just settle
+	 * briefly and move on */
+	gpiod_direction_output(chip->int_gpiod, 1);
+	msleep(50);
+
+	if (!fw_force && bin_ver == sys_ver) {
+		dev_dbg(chip->dev, "firmware up to date (0x%04x)\n", sys_ver);
+	} else {
+		dev_info(chip->dev, "fw update: chip 0x%04x, image 0x%04x%s\n",
+			 sys_ver, bin_ver, fw_force ? " (forced)" : "");
+		mutex_lock(&chip->prog_lock);
+		ret = cps8601_do_fw_update(chip, fw->data, fw->size);
+		mutex_unlock(&chip->prog_lock);
+		if (ret)
+			dev_warn(chip->dev,
+				 "fw update failed (%d), keeping current firmware\n",
+				 ret);
+		else
+			dev_info(chip->dev, "fw update complete\n");
+	}
+
+	gpiod_direction_input(chip->int_gpiod);
+out:
+	release_firmware(fw);
+}
+
 static void cps8601_handle_rx_frame(struct cps8601 *chip)
 {
 	u8 frame[11];
@@ -323,6 +742,10 @@ static void cps8601_init_work(struct work_struct *work)
 		goto out_nopm;
 	}
 
+	/* vendor fw_update_work_func: reflash when the image version differs
+	 * (or fw_force is set); on failure keep going with what runs */
+	cps8601_fw_update_check(chip);
+
 	cps8601_read16(chip, CPS8601_REG_FW_VER, &chip->fw_version);
 
 	if (chip->ocp_uv && chip->ocp_uv <= 3000)
@@ -363,8 +786,6 @@ static void cps8601_init_work(struct work_struct *work)
 	__pm_relax(chip->ws);
 	return;
 
-out_fail:
-	gpiod_set_value(chip->sw_en_gpiod, 0);
 out_nopm:
 	__pm_relax(chip->ws);
 }
@@ -502,6 +923,13 @@ static const struct regmap_config cps8601_regmap_cfg = {
 	.max_register	= 0xffff,
 };
 
+/* program-mode space (fw update): 32-bit register addresses on the wire */
+static const struct regmap_config cps8601_progmap_cfg = {
+	.reg_bits	= 32,
+	.val_bits	= 8,
+	.max_register	= 0xffffffff,
+};
+
 static int cps8601_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -520,6 +948,14 @@ static int cps8601_probe(struct i2c_client *client)
 	if (IS_ERR(chip->regmap))
 		return dev_err_probe(dev, PTR_ERR(chip->regmap),
 				     "regmap init failed\n");
+
+	/* second map for the program-mode address space, 32-bit register
+	 * addresses; the vendor module does exactly the same */
+	chip->progmap = devm_regmap_init_i2c(client, &cps8601_progmap_cfg);
+	if (IS_ERR(chip->progmap))
+		return dev_err_probe(dev, PTR_ERR(chip->progmap),
+				     "program regmap init failed\n");
+	mutex_init(&chip->prog_lock);
 
 	chip->int_gpiod = devm_gpiod_get(dev, "int", GPIOD_IN);
 	chip->sleep_gpiod = devm_gpiod_get(dev, "sleep", GPIOD_OUT_LOW);
