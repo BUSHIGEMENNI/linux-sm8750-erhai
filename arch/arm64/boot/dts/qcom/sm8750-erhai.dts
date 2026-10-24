@@ -2174,3 +2174,101 @@
 		output-enable;
 	};
 };
+
+
+/*
+ * Camera stage-0 bring-up: PM8550 flash/torch and the rear CCI0 bus.
+ * Both are independent of CAMSS; the flash lights up via sysfs as soon
+ * as leds-qcom-flash binds, and CCI0 registers an i2c adapter so the
+ * rear sensor/EEPROM addresses can be probed with i2cdetect.
+ */
+&pm8550 {
+	flash-led@ee00 {
+		compatible = "qcom,pm8550-flash-led", "qcom,spmi-flash-led";
+		reg = <0xee00>;
+
+		led-0 {
+			function = LED_FUNCTION_FLASH;
+			color = <LED_COLOR_ID_WHITE>;
+			led-sources = <1>;
+			led-max-microamp = <500000>;     /* torch: stock 500mA */
+			flash-max-microamp = <1500000>;  /* flash: stock 1.5A  */
+			flash-max-timeout-us = <1280000>;/* stock 1280ms       */
+		};
+
+		led-1 {
+			function = LED_FUNCTION_FLASH;
+			color = <LED_COLOR_ID_WHITE>;
+			led-sources = <2>;
+			led-max-microamp = <500000>;
+			flash-max-microamp = <1500000>;
+			flash-max-timeout-us = <1280000>;
+		};
+	};
+};
+
+&tlmm {
+	cci0_default: cci0-default-state {
+		sda-pins {
+			pins = "gpio113";
+			function = "cci_i2c_sda";
+			drive-strength = <2>;
+			bias-pull-up = <2200>;
+		};
+		scl-pins {
+			pins = "gpio114";
+			function = "cci_i2c_scl";
+			drive-strength = <2>;
+			bias-pull-up = <2200>;
+		};
+	};
+
+	cci0_sleep: cci0-sleep-state {
+		sda-pins {
+			pins = "gpio113";
+			function = "cci_i2c_sda";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+		scl-pins {
+			pins = "gpio114";
+			function = "cci_i2c_scl";
+			drive-strength = <2>;
+			bias-pull-down;
+		};
+	};
+};
+
+&soc {
+	cci0: cci@ac7b000 {
+		compatible = "qcom,sm8750-cci", "qcom,msm8996-cci";
+		reg = <0 0x0ac7b000 0 0x1000>;
+		interrupts = <GIC_SPI 426 IRQ_TYPE_EDGE_RISING 0>;
+		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
+		clocks = <&camcc CAM_CC_CCI_0_CLK>;
+		clock-names = "cci";
+		assigned-clocks = <&camcc CAM_CC_CCI_0_CLK>;
+		assigned-clock-rates = <37500000>;
+		pinctrl-0 = <&cci0_default>;
+		pinctrl-1 = <&cci0_sleep>;
+		pinctrl-names = "default", "sleep";
+		status = "okay";
+
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cci0_i2c0: i2c-bus@0 {
+			reg = <0>;
+			clock-frequency = <400000>; /* 先 400k 稳, 扫通后再上 1M */
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+
+		cci0_i2c1: i2c-bus@1 {
+			reg = <1>;
+			clock-frequency = <400000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+		};
+	};
+};
