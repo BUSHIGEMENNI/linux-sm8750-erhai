@@ -97,6 +97,7 @@ struct cps8601 {
 
 	int			irq;
 	bool			irq_armed;
+	unsigned int		init_retries;
 
 	u16			fw_version;
 	u16			chip_id;
@@ -309,8 +310,17 @@ static void cps8601_init_work(struct work_struct *work)
 		msleep(100);
 	}
 	if (id != CPS8601_CHIP_ID) {
-		dev_err(chip->dev, "chip id mismatch: %#x (ret %d)\n", id, ret);
-		goto out_fail;
+		dev_warn(chip->dev,
+			 "chip id mismatch: %#x (ret %d), retry %u/3 in 15 s\n",
+			 id, ret, chip->init_retries + 1);
+		if (chip->init_retries++ < 3) {
+			gpiod_set_value(chip->sw_en_gpiod, 0);
+			gpiod_set_value(chip->scan_gpiod, 0);
+			gpiod_set_value(chip->boost_en_gpiod, 0);
+			schedule_delayed_work(&chip->ready_work,
+					      msecs_to_jiffies(15000));
+		}
+		goto out_nopm;
 	}
 
 	cps8601_read16(chip, CPS8601_REG_FW_VER, &chip->fw_version);
@@ -355,6 +365,7 @@ static void cps8601_init_work(struct work_struct *work)
 
 out_fail:
 	gpiod_set_value(chip->sw_en_gpiod, 0);
+out_nopm:
 	__pm_relax(chip->ws);
 }
 
@@ -362,6 +373,14 @@ static void cps8601_ready_work(struct work_struct *work)
 {
 	struct cps8601 *chip = container_of(work, struct cps8601,
 					    ready_work.work);
+
+	if (!chip->ready) {
+		/* retry entry: the first power-on raced a slow-starting
+		 * ADSP (hboost service swallows early rail requests), so
+		 * re-run the whole rail + power-on + probe sequence */
+		schedule_work(&chip->init_work);
+		return;
+	}
 
 	__pm_stay_awake(chip->ws);
 	gpiod_set_value(chip->sw_en_gpiod, 0);
