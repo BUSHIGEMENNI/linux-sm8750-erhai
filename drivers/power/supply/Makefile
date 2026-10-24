@@ -134,3 +134,7 @@ obj-$(CONFIG_FUEL_GAUGE_MM8013)	+= mm8013.o
 obj-$(CONFIG_MACSMC_POWER)	+= macsmc-power.o
 obj-$(CONFIG_CHARGER_MAX77759)	+= max77759_charger.o
 obj-$(CONFIG_CHARGER_CPS8601)	+= cps8601.o
+obj-$(CONFIG_ERHAI_OTG_GLINK)	+= erhai_otg_glink.o
+obj-$(CONFIG_CHARGER_SC8547A)	+= sc8547a.o
+obj-$(CONFIG_CHARGER_ERHAI_PPS)	+= erhai_pps.o
+CFLAGS_erhai_pps.o		:= -I$(src)

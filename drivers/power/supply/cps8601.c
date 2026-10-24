@@ -96,7 +96,15 @@ struct cps8601 {
  */
 static void cps8601_power_on(struct cps8601 *chip)
 {
-	gpiod_set_value(chip->off_state_gpiod, 0);
+	/*
+	 * Vendor order (init_work_func +0x264): raise the boost rail and
+	 * the scan line first, then sw_en, settle 2.5 s for the MCU. The
+	 * stock DT calls this line "off_state" but the vendor drives it
+	 * high for the whole session: it is the boost enable that powers
+	 * the MCU, not an off request.
+	 */
+	gpiod_set_value(chip->boost_en_gpiod, 1);
+	gpiod_set_value(chip->scan_gpiod, 1);
 	gpiod_set_value(chip->sleep_gpiod, 0);
 	gpiod_set_value(chip->sw_en_gpiod, 1);
 	msleep(2500);

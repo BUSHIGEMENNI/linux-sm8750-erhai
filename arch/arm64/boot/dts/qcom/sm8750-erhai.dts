@@ -1447,6 +1447,50 @@
 	};
 };
 
+/* ---------------------------------------------------------------------------
+ * SuperVOOC fast charging - dual Southchip SC8547A charge pump (master+slave),
+ * ported from the 7.3-rc5 erhai tree (TheMojoMan, lab-validated 39 W PPS).
+ * Ground truth (live OxygenOS /proc/device-tree + stock dtbo fixups):
+ *   master oplus,sc8547a@6F on qupv3_hub_i2c8 == mainline i2c_hub_8 (@9a0000),
+ *          addr 0x6F, IRQ tlmm gpio163 (falling), ovp 0x36 ocp 0x0b
+ *   slave  sc8547-charger-slave@6F on qupv3_hub_i2c2 == mainline i2c_hub_2
+ *          (@988000), addr 0x6F, no IRQ ("oplus,slave").
+ * Both are SC8547A 2:1 pumps with an integrated VOOC serial PHY, driven
+ * AP-side by drivers/power/supply/sc8547a.c (CONFIG_CHARGER_SC8547A);
+ * the PPS host engine is erhai_pps.c (CONFIG_CHARGER_ERHAI_PPS).
+ * Stock runs both buses at 400 kHz (dtbo fragment@76 qcom,clk-freq-out);
+ * 100 kHz default kept as on the validated 7.3 tree - flip to 400 kHz by
+ * adding clock-frequency if the pump trace shows slow I2C.
+ */
+&i2c_hub_8 {
+	status = "okay";
+
+	sc8547a_master: charge-pump@6f {
+		compatible = "oplus,sc8547a";
+		reg = <0x6f>;
+
+		interrupts-extended = <&tlmm 163 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&sc8547_int_active>;
+
+		sc,vbat-ovp-reg = /bits/ 8 <0x36>;
+		sc,ibus-ocp-reg = /bits/ 8 <0x0b>;
+	};
+};
+
+&i2c_hub_2 {
+	status = "okay";
+
+	sc8547a_slave: charge-pump@6f {
+		compatible = "oplus,sc8547a";
+		reg = <0x6f>;
+		oplus,slave;
+
+		sc,vbat-ovp-reg = /bits/ 8 <0x36>;
+		sc,ibus-ocp-reg = /bits/ 8 <0x0b>;
+	};
+};
+
 &i2c_hub_4 {
 	clock-frequency = <400000>;
 	status = "okay";
@@ -1844,6 +1888,14 @@
 &tlmm {
 	/* reserved for secure world */
 	gpio-reserved-ranges = <36 4>, <74 1>;
+
+	sc8547_int_active: sc8547-int-active-state {
+		pins = "gpio163";
+		function = "gpio";
+		drive-strength = <2>;
+		bias-pull-up;
+		input-enable;
+	};
 
 	qupv3_se4_spi: qupv3-se4-spi-state {
 		miso-pins {
