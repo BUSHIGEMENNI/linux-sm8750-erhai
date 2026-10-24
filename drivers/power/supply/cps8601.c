@@ -72,6 +72,9 @@ struct cps8601 {
 	struct work_struct	init_work;
 	struct wakeup_source	*ws;
 
+	int			irq;
+	bool			irq_armed;
+
 	u16			fw_version;
 	u16			chip_id;
 	int			pen_soc;
@@ -97,7 +100,6 @@ static void cps8601_power_on(struct cps8601 *chip)
 	gpiod_set_value(chip->sleep_gpiod, 0);
 	gpiod_set_value(chip->sw_en_gpiod, 1);
 	msleep(2500);
-	gpiod_set_value(chip->sleep_gpiod, 1);
 }
 
 static void cps8601_power_off(struct cps8601 *chip)
@@ -179,15 +181,15 @@ static irqreturn_t cps8601_irq(int irq, void *data)
 
 	__pm_stay_awake(chip->ws);
 
+	/* vendor order: clear pending first, then read status, then ack by
+	 * writing the status back (cps_comm_reg e3/e4/e5) */
+	cps8601_write16(chip, CPS8601_REG_IRQ_CLEAR, 0xffff);
 	if (cps8601_read16(chip, CPS8601_REG_IRQ_STATUS, &status)) {
 		__pm_relax(chip->ws);
 		return IRQ_HANDLED;
 	}
 	active = status;
-
-	/* ack + clear, vendor order: write status back to 0x09, 0xffff to 0x05 */
 	cps8601_write16(chip, CPS8601_REG_IRQ_ACK, status);
-	cps8601_write16(chip, CPS8601_REG_IRQ_CLEAR, 0xffff);
 
 	if (active & CPS8601_IRQ_RX_ATTACH) {
 		u16 width = 0;
@@ -247,13 +249,27 @@ static void cps8601_init_work(struct work_struct *work)
 		cps8601_write16(chip, CPS8601_REG_OCP_TH, chip->ocp_uv);
 	if (chip->lvp_uv && chip->lvp_uv <= 5000)
 		cps8601_write16(chip, CPS8601_REG_LVP_TH, chip->lvp_uv);
-	if (chip->ovp_uv && (chip->ovp_uv <= 20000 || chip->ovp_uv > 37000))
+	if (chip->ovp_uv >= 3000 && chip->ovp_uv <= 20000)
 		cps8601_write16(chip, CPS8601_REG_OVP_TH, chip->ovp_uv);
 	if (chip->fod_uv)
 		cps8601_write16(chip, CPS8601_REG_FOD_TH, chip->fod_uv);
 
+	/* vendor raises the sleep line only after the thresholds are set */
+	gpiod_set_value(chip->sleep_gpiod, 1);
+
 	chip->ready = true;
 	dev_info(chip->dev, "CPS8601 ready, fw 0x%04x\n", chip->fw_version);
+
+	/* IRQ is armed only once the chip is up: the 2.5 s MCU boot window
+	 * would otherwise feed INT glitches into the handler before the
+	 * chip can answer, and the vendor driver registers it here too. */
+	ret = request_threaded_irq(chip->irq, NULL, cps8601_irq,
+				   IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+				   "cps8601", chip);
+	if (ret)
+		dev_err(chip->dev, "irq request failed: %d\n", ret);
+	else
+		chip->irq_armed = true;
 
 	cps8601_scan(chip);
 	__pm_relax(chip->ws);
@@ -379,8 +395,6 @@ static int cps8601_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct cps8601 *chip;
-	int irq;
-	int ret;
 
 	chip = devm_kzalloc(dev, sizeof(*chip), GFP_KERNEL);
 	if (!chip)
@@ -411,15 +425,11 @@ static int cps8601_probe(struct i2c_client *client)
 	device_property_read_u32(dev, "oplus,lvp-threshold", &chip->lvp_uv);
 	device_property_read_u32(dev, "oplus,fod-threshold", &chip->fod_uv);
 
-	irq = gpiod_to_irq(chip->int_gpiod);
-	if (irq < 0)
-		return dev_err_probe(dev, irq, "no irq for int line\n");
+	chip->irq = gpiod_to_irq(chip->int_gpiod);
+	if (chip->irq < 0)
+		return dev_err_probe(dev, chip->irq, "no irq for int line\n");
 
-	ret = devm_request_threaded_irq(dev, irq, NULL, cps8601_irq,
-					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
-					"cps8601", chip);
-	if (ret)
-		return dev_err_probe(dev, ret, "irq request failed\n");
+	/* the IRQ itself is requested from init_work once the chip is ready */
 
 	chip->ws = wakeup_source_register(dev, "cps8601");
 	INIT_WORK(&chip->init_work, cps8601_init_work);
@@ -433,6 +443,11 @@ static void cps8601_remove(struct i2c_client *client)
 	struct cps8601 *chip = i2c_get_clientdata(client);
 
 	cancel_work_sync(&chip->init_work);
+	/* free the IRQ before touching the power lines: shutting the chip
+	 * down edges INT, and the handler must not run against an
+	 * unregistered wakeup source afterwards */
+	if (chip->irq_armed)
+		free_irq(chip->irq, chip);
 	wakeup_source_unregister(chip->ws);
 	if (chip->ready)
 		cps8601_power_off(chip);

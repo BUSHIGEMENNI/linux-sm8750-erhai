@@ -45,9 +45,9 @@
 				"IN2_HPHR", "HPHR_OUT",
 				"AMIC1", "MIC BIAS1",
 				"AMIC2", "MIC BIAS2",
-				"AMIC3", "MIC BIAS3",
+				"AMIC3", "MIC BIAS4",
 				"AMIC4", "MIC BIAS3",
-				"AMIC5", "MIC BIAS4",
+				"AMIC5", "MIC BIAS3",
 				"TX SWR_INPUT0", "ADC1_OUTPUT",
 				"TX SWR_INPUT1", "ADC2_OUTPUT",
 				"TX SWR_INPUT2", "ADC3_OUTPUT",
@@ -98,7 +98,7 @@
 			};
 
 			codec {
-				sound-dai = <&wcd939x 1>, <&swr2 0>, <&lpass_txmacro 0>;
+				sound-dai = <&wcd939x 1>, <&swr2 1>, <&lpass_txmacro 0>;
 			};
 
 			platform {
@@ -1428,7 +1428,6 @@
  * not required for first bring-up.
  */
 &i2c_hub_3 {
-	clock-frequency = <400000>;
 	status = "okay";
 
 	cps8601: pen-charger@41 {
