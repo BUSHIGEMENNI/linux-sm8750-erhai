@@ -845,6 +845,19 @@ bool erhai_otg_charge_inhibited(void)
 }
 EXPORT_SYMBOL_GPL(erhai_otg_charge_inhibited);
 
+/* Raw send through this client for sibling drivers that must not
+ * register their own pmic_glink client (non-standard owners never get a
+ * PDR attachment and block in client_register forever). */
+int erhai_otg_glink_send_raw(const void *data, size_t len)
+{
+	struct erhai_otg *otg = erhai_otg_glink_dev;
+
+	if (!otg || !otg->client)
+		return -ENODEV;
+	return pmic_glink_send(otg->client, (void *)data, len);
+}
+EXPORT_SYMBOL_GPL(erhai_otg_glink_send_raw);
+
 int erhai_otg_adsp_prop_set(u32 opcode, u32 property, u32 value)
 {
 	if (!erhai_otg_glink_dev)

@@ -28,6 +28,7 @@
 #include <linux/completion.h>
 #include <linux/mutex.h>
 #include <linux/soc/qcom/pmic_glink.h>
+#include "erhai_otg_glink.h"
 
 #define CPS8601_REG_CHIP_ID		0x00	/* 2B, expect 0x8601 */
 #define CPS8601_REG_FW_VER		0x02	/* 2B */
@@ -96,10 +97,6 @@ struct cps8601 {
 	int			irq;
 	bool			irq_armed;
 
-	struct pmic_glink_client	*glink;
-	struct completion	glink_ack;
-	struct mutex		glink_lock;
-
 	u16			fw_version;
 	u16			chip_id;
 	int			pen_soc;
@@ -113,42 +110,24 @@ struct cps8601 {
 	u16			debug_reg;
 };
 
-static void cps8601_glink_cb(const void *data, size_t len, void *priv)
-{
-	struct cps8601 *chip = priv;
-
-	complete(&chip->glink_ack);
-}
-
-static void cps8601_glink_pdr(void *priv, int state)
-{
-	/* the rail request needs the ADSP up; probe-time sends simply fail */
-}
-
 static int cps8601_hboost_req(struct cps8601 *chip, u8 code)
 {
 	struct cps8601_hboost_msg msg = { };
 	int ret;
 
-	if (!chip->glink)
-		return -ENODEV;
-
-	mutex_lock(&chip->glink_lock);
-	reinit_completion(&chip->glink_ack);
+	/* ride on the erhai_otg client: a dedicated 0x8011 client never gets
+	 * a PDR attachment and blocks in pmic_glink_client_register */
 	msg.hdr.owner = cpu_to_le32(CPS8601_HBOOST_OWNER);
 	msg.hdr.type = cpu_to_le32(PMIC_GLINK_REQ_RESP);
 	msg.hdr.opcode = cpu_to_le32(CPS8601_HBOOST_OPCODE);
 	msg.code = code;
 
-	ret = pmic_glink_send(chip->glink, &msg, sizeof(msg));
-	if (ret) {
-		mutex_unlock(&chip->glink_lock);
+	ret = erhai_otg_glink_send_raw(&msg, sizeof(msg));
+	if (ret)
 		return ret;
-	}
-	ret = wait_for_completion_timeout(&chip->glink_ack,
-					  msecs_to_jiffies(2500)) ? 0 : -ETIMEDOUT;
-	mutex_unlock(&chip->glink_lock);
-	return ret;
+	/* the ACK lands in the otg callback; the rail itself settles fast */
+	msleep(300);
+	return 0;
 }
 
 /*
@@ -512,16 +491,6 @@ static int cps8601_probe(struct i2c_client *client)
 		return dev_err_probe(dev, chip->irq, "no irq for int line\n");
 
 	/* the IRQ itself is requested from init_work once the chip is ready */
-
-	init_completion(&chip->glink_ack);
-	mutex_init(&chip->glink_lock);
-	chip->glink = devm_pmic_glink_client_alloc(dev, CPS8601_HBOOST_OWNER,
-						   cps8601_glink_cb,
-						   cps8601_glink_pdr, chip);
-	if (IS_ERR(chip->glink))
-		chip->glink = NULL;
-	else
-		pmic_glink_client_register(chip->glink);
 
 	chip->ws = wakeup_source_register(dev, "cps8601");
 	INIT_WORK(&chip->init_work, cps8601_init_work);
