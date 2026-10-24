@@ -36,6 +36,7 @@ int erhai_otg_adsp_usb_prop(u32 property);
  */
 int erhai_otg_adsp_prop_get(u32 opcode, u32 property);
 int erhai_otg_adsp_prop_set(u32 opcode, u32 property, u32 value);
+int erhai_otg_glink_send_raw(const void *data, size_t len);
 bool erhai_otg_charge_inhibited(void);
 #else
 static inline int erhai_otg_adsp_usb_prop(u32 property)
