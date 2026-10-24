@@ -41,9 +41,16 @@
 	sound {
 		compatible = "qcom,sm8750-sndcard", "qcom,sm8450-sndcard";
 		model = "OnePlus-Pad-2-Pro";
-		audio-routing = "AMIC1", "MIC BIAS1",
-				"AMIC5", "MIC BIAS3",
+		audio-routing = "IN1_HPHL", "HPHL_OUT",
+				"IN2_HPHR", "HPHR_OUT",
+				"AMIC1", "MIC BIAS1",
+				"AMIC2", "MIC BIAS2",
+				"AMIC3", "MIC BIAS3",
+				"AMIC4", "MIC BIAS3",
+				"AMIC5", "MIC BIAS4",
 				"TX SWR_INPUT0", "ADC1_OUTPUT",
+				"TX SWR_INPUT1", "ADC2_OUTPUT",
+				"TX SWR_INPUT2", "ADC3_OUTPUT",
 				"TX SWR_INPUT3", "ADC4_OUTPUT";
 
 		pinctrl-0 = <&sec_tdm_active>;
@@ -59,6 +66,23 @@
 
 			codec {
 				sound-dai = <&mdss_dp0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+
+		/* USB-C analog headphones via WCD9395 HPH + usbss SBU switch */
+		wcd-playback-dai-link {
+			link-name = "WCD Playback";
+
+			cpu {
+				sound-dai = <&q6apmbedai RX_CODEC_DMA_RX_0>;
+			};
+
+			codec {
+				sound-dai = <&wcd939x 0>, <&swr1 0>, <&lpass_rxmacro 0>;
 			};
 
 			platform {
@@ -1396,6 +1420,34 @@
 	};
 };
 
+/*
+ * CPS8601 inductive pen charger (TX coil for the stylus). Five TLMM lines
+ * from the stock dtbo fragment@80: int 172, sleep 106, scan 56,
+ * off_state 107, sw_en 105. The chip carries factory firmware; the
+ * optional SRAM update image (wireless_pen/0/cps8601_firmware.bin) is
+ * not required for first bring-up.
+ */
+&i2c_hub_3 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	cps8601: pen-charger@41 {
+		compatible = "oplus,wls-charger-cps8601";
+		reg = <0x41>;
+
+		int-gpios = <&tlmm 172 GPIO_ACTIVE_HIGH>;
+		sleep-gpios = <&tlmm 106 GPIO_ACTIVE_HIGH>;
+		scan-gpios = <&tlmm 56 GPIO_ACTIVE_HIGH>;
+		off-state-gpios = <&tlmm 107 GPIO_ACTIVE_HIGH>;
+		sw-en-gpios = <&tlmm 105 GPIO_ACTIVE_HIGH>;
+
+		oplus,ocp-threshold = <500>;
+		oplus,ovp-threshold = <12000>;
+		oplus,lvp-threshold = <4000>;
+		oplus,fod-threshold = <400>;
+	};
+};
+
 &i2c_hub_4 {
 	clock-frequency = <400000>;
 	status = "okay";
@@ -1763,6 +1815,25 @@
 
 &swr2 {
 	status = "okay";
+
+	/*
+	 * The TX soundwire controller reports one DOUT port, but the SoC
+	 * baseline declares none. With dout-ports = <0> the driver clears
+	 * the count, the WCD9395 TX codec cannot open its control port and
+	 * every capture start times out at the ADSP (APM port 120, -110).
+	 * Mirror the hamoa (X Elite) TX bus: one DOUT port first, then the
+	 * four stock DIN entries.
+	 */
+	qcom,dout-ports = <1>;
+	qcom,ports-sinterval-low =	/bits/ 8 <0x00 0x01 0x01 0x03 0x03>;
+	qcom,ports-offset1 =		/bits/ 8 <0x00 0x00 0x00 0x01 0x01>;
+	qcom,ports-offset2 =		/bits/ 8 <0x00 0x00 0x00 0x00 0x00>;
+	qcom,ports-hstart =		/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-hstop =		/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-word-length =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-lane-control =	/bits/ 8 <0xff 0x01 0x02 0x00 0x00>;
 
 	wcd_tx: codec@0,3 {
 		compatible = "sdw20217010e00";
