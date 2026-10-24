@@ -170,6 +170,9 @@ module_param(pps_poll_ms, uint, 0644);
 MODULE_PARM_DESC(pps_poll_ms, "engine poll period (ms)");
 
 static unsigned int pps_identify_ms = 10000;
+static unsigned int pps_reprobe_ms = 15000;
+module_param(pps_reprobe_ms, uint, 0644);
+MODULE_PARM_DESC(pps_reprobe_ms, "re-probe interval while the adapter reads as undeployable (ADSP slow start)");
 module_param(pps_identify_ms, uint, 0644);
 MODULE_PARM_DESC(pps_identify_ms,
 		 "wait for the serial-VOOC ladder to decline before PPS engages (ms)");
@@ -402,7 +405,8 @@ struct erhai_pps {
 	unsigned long		armed_since;
 	unsigned long		ramp_since;
 	unsigned int		stall_count;
-	bool			plug_logged;	/* adapter line printed for this plug */
+	bool			plug_logged;
+	unsigned long		last_reprobe;	/* adapter line printed for this plug */
 
 	/* what we last commanded / observed */
 	unsigned int		set_volt_mv;
@@ -925,8 +929,23 @@ static void pps_poll(struct erhai_pps *p)
 				pps_usb_get(PPS_PROP_USB_GET_PPS_MAX_CURR),
 				p->vbus_mv, icl, rc);
 		}
-		if (!pps_deployable(p, &vooc))
+		/*
+		 * Early after boot the ADSP property service may still be
+		 * coming up: the first read returns garbage (real_type 6,
+		 * pps_type 0) and the glink queue then stalls behind the
+		 * audio graph start, so the state never changes on its own.
+		 * Re-read every pps_reprobe_ms until the adapter reports as
+		 * deployable instead of waiting forever for a property event.
+		 */
+		if (!pps_deployable(p, &vooc)) {
+			if (!p->plug_logged ||
+			    time_before(jiffies, p->last_reprobe +
+					msecs_to_jiffies(pps_reprobe_ms)))
+				return;
+			p->last_reprobe = jiffies;
+			p->plug_logged = false;	/* force a fresh probe log */
 			return;
+		}
 		pps_enter(p, PPS_ARMED, "PD_PPS adapter");
 		return;
 	}
