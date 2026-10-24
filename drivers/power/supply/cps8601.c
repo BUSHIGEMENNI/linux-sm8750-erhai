@@ -92,6 +92,7 @@ struct cps8601 {
 	struct gpio_desc	*sw_en_gpiod;
 
 	struct work_struct	init_work;
+	struct delayed_work	ready_work;
 	struct wakeup_source	*ws;
 
 	int			irq;
@@ -154,13 +155,14 @@ static void cps8601_power_on(struct cps8601 *chip)
 
 static void cps8601_power_off(struct cps8601 *chip)
 {
-	/* vendor shutdown: fod 3000, ctrl |= 0x02|0x08, tx 0x4b=31, 0x4c=172,
-	 * ctrl |= 0x10 */
-	regmap_write(chip->regmap, CPS8601_REG_FOD_TH, 3000);
-	regmap_set_bits(chip->regmap, CPS8601_REG_CTRL, 0x02 | 0x08);
-	regmap_write(chip->regmap, 0x4b, 31);
-	regmap_write(chip->regmap, 0x4c, 172);
-	regmap_set_bits(chip->regmap, CPS8601_REG_CTRL, 0x10);
+	/*
+	 * Deliberately NOT the vendor shutdown register writes (fod 3000,
+	 * ctrl 0x02|0x08|0x10, 0x4b=31, 0x4c=172): they latch the MCU off
+	 * and only a real rail power cycle revives it, which the ADSP does
+	 * not grant on a warm re-request. Gate the control lines instead;
+	 * the MCU idles, and the next probe re-runs the default->attach
+	 * rail dance.
+	 */
 	gpiod_set_value(chip->sw_en_gpiod, 0);
 	gpiod_set_value(chip->sleep_gpiod, 0);
 	gpiod_set_value(chip->scan_gpiod, 0);
@@ -285,7 +287,14 @@ static void cps8601_init_work(struct work_struct *work)
 
 	__pm_stay_awake(chip->ws);
 
-	/* power the coil rail through the ADSP before touching the MCU */
+	/* power the coil rail through the ADSP before touching the MCU.
+	 * Drop it to code 0 first: a warm rail request is a no-op on the
+	 * ADSP side, and an MCU latched in its shutdown registers only
+	 * wakes on a real power cycle. */
+	ret = cps8601_hboost_req(chip, CPS8601_HBOOST_DEFAULT_CODE);
+	if (ret)
+		dev_warn(chip->dev, "hboost default failed: %d\n", ret);
+	msleep(400);
 	ret = cps8601_hboost_req(chip, CPS8601_HBOOST_ATTACH_CODE);
 	if (ret)
 		dev_warn(chip->dev, "hboost rail request failed: %d\n", ret);
@@ -332,12 +341,34 @@ static void cps8601_init_work(struct work_struct *work)
 	else
 		chip->irq_armed = true;
 
-	cps8601_scan(chip);
+	/*
+	 * Vendor post-ready sequence (init_work_func +0x5a4..): drop the
+	 * boost line, then after 1.25 s release sw_en and pulse scan 0->1
+	 * with a 50 ms gap. Holding sw_en/boost high (as the bring-up v1
+	 * did) leaves the MCU in its setup state; only this handoff lets it
+	 * enter ping/TX mode.
+	 */
+	gpiod_set_value(chip->boost_en_gpiod, 0);
+	schedule_delayed_work(&chip->ready_work, msecs_to_jiffies(1250));
 	__pm_relax(chip->ws);
 	return;
 
 out_fail:
 	gpiod_set_value(chip->sw_en_gpiod, 0);
+	__pm_relax(chip->ws);
+}
+
+static void cps8601_ready_work(struct work_struct *work)
+{
+	struct cps8601 *chip = container_of(work, struct cps8601,
+					    ready_work.work);
+
+	__pm_stay_awake(chip->ws);
+	gpiod_set_value(chip->sw_en_gpiod, 0);
+	gpiod_set_value(chip->scan_gpiod, 0);
+	msleep(50);
+	gpiod_set_value(chip->scan_gpiod, 1);
+	dev_info(chip->dev, "scan armed (vendor post-ready state)\n");
 	__pm_relax(chip->ws);
 }
 
@@ -494,6 +525,7 @@ static int cps8601_probe(struct i2c_client *client)
 
 	chip->ws = wakeup_source_register(dev, "cps8601");
 	INIT_WORK(&chip->init_work, cps8601_init_work);
+	INIT_DELAYED_WORK(&chip->ready_work, cps8601_ready_work);
 	schedule_work(&chip->init_work);
 
 	return 0;
@@ -504,6 +536,7 @@ static void cps8601_remove(struct i2c_client *client)
 	struct cps8601 *chip = i2c_get_clientdata(client);
 
 	cancel_work_sync(&chip->init_work);
+	cancel_delayed_work_sync(&chip->ready_work);
 	/* free the IRQ before touching the power lines: shutting the chip
 	 * down edges INT, and the handler must not run against an
 	 * unregistered wakeup source afterwards */
@@ -514,6 +547,7 @@ static void cps8601_remove(struct i2c_client *client)
 		cps8601_power_off(chip);
 	else
 		gpiod_set_value(chip->sw_en_gpiod, 0);
+	cps8601_hboost_req(chip, 0);
 }
 
 static const struct of_device_id cps8601_of_match[] = {
