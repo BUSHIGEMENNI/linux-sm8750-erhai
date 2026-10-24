@@ -179,16 +179,16 @@ static int cps8601_read16(struct cps8601 *chip, u16 reg, u16 *val)
 	unsigned int v;
 	int ret;
 
-	/* multi-byte values are big-endian: the first register carries
-	 * the high byte (chip id reads back 0x86,0x01 -> 0x8601) */
+	/* multi-byte values are little-endian: the first register carries
+	 * the low byte (chip id bytes read back 01,86 -> 0x8601) */
 	ret = regmap_read(chip->regmap, reg, &v);
 	if (ret)
 		return ret;
-	*val = v << 8;
+	*val = v;
 	ret = regmap_read(chip->regmap, reg + 1, &v);
 	if (ret)
 		return ret;
-	*val |= v;
+	*val |= v << 8;
 	return 0;
 }
 
@@ -196,11 +196,11 @@ static int cps8601_write16(struct cps8601 *chip, u16 reg, u16 val)
 {
 	int ret;
 
-	/* big-endian like the reads */
-	ret = regmap_write(chip->regmap, reg, val >> 8);
+	/* little-endian like the reads */
+	ret = regmap_write(chip->regmap, reg, val & 0xff);
 	if (ret)
 		return ret;
-	return regmap_write(chip->regmap, reg + 1, val & 0xff);
+	return regmap_write(chip->regmap, reg + 1, val >> 8);
 }
 
 static void cps8601_handle_rx_frame(struct cps8601 *chip)
