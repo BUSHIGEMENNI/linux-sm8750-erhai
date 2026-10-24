@@ -25,6 +25,9 @@
 #include <linux/workqueue.h>
 #include <linux/pm_wakeup.h>
 #include <linux/delay.h>
+#include <linux/completion.h>
+#include <linux/mutex.h>
+#include <linux/soc/qcom/pmic_glink.h>
 
 #define CPS8601_REG_CHIP_ID		0x00	/* 2B, expect 0x8601 */
 #define CPS8601_REG_FW_VER		0x02	/* 2B */
@@ -44,6 +47,24 @@
 #define CPS8601_REG_RX_FRAME		0x40	/* 11B burst */
 
 #define CPS8601_CHIP_ID			0x8601
+
+/*
+ * The pen coil rail is fed by the PMIC hboost converter, gated on the ADSP
+ * side: the chip stays dead on I2C until the rail is requested over
+ * pmic_glink (stock property qcom,pen_is_supply_by_hboost). Vendor message:
+ * owner 0x8011, PMIC_GLINK_REQ_RESP, opcode 0x10007, one voltage code byte
+ * computed as (mV - 2000) / 50 - attach voltage 10010 mV -> code 160.
+ */
+#define CPS8601_HBOOST_OWNER		0x8011
+#define CPS8601_HBOOST_OPCODE		0x10007
+#define CPS8601_HBOOST_ATTACH_CODE	160	/* 10010 mV */
+#define CPS8601_HBOOST_DEFAULT_CODE	100	/* 7000 mV */
+
+struct cps8601_hboost_msg {
+	struct pmic_glink_hdr	hdr;
+	u8			code;
+	u8			reserved[3];
+} __packed;
 
 /* IRQ status bits (reg 0x07-0x08), from the vendor handler bit tests */
 #define CPS8601_IRQ_Q_CALI		BIT(0)
@@ -75,6 +96,10 @@ struct cps8601 {
 	int			irq;
 	bool			irq_armed;
 
+	struct pmic_glink_client	*glink;
+	struct completion	glink_ack;
+	struct mutex		glink_lock;
+
 	u16			fw_version;
 	u16			chip_id;
 	int			pen_soc;
@@ -87,6 +112,44 @@ struct cps8601 {
 	u32			fod_uv;
 	u16			debug_reg;
 };
+
+static void cps8601_glink_cb(const void *data, size_t len, void *priv)
+{
+	struct cps8601 *chip = priv;
+
+	complete(&chip->glink_ack);
+}
+
+static void cps8601_glink_pdr(void *priv, int state)
+{
+	/* the rail request needs the ADSP up; probe-time sends simply fail */
+}
+
+static int cps8601_hboost_req(struct cps8601 *chip, u8 code)
+{
+	struct cps8601_hboost_msg msg = { };
+	int ret;
+
+	if (!chip->glink)
+		return -ENODEV;
+
+	mutex_lock(&chip->glink_lock);
+	reinit_completion(&chip->glink_ack);
+	msg.hdr.owner = cpu_to_le32(CPS8601_HBOOST_OWNER);
+	msg.hdr.type = cpu_to_le32(PMIC_GLINK_REQ_RESP);
+	msg.hdr.opcode = cpu_to_le32(CPS8601_HBOOST_OPCODE);
+	msg.code = code;
+
+	ret = pmic_glink_send(chip->glink, &msg, sizeof(msg));
+	if (ret) {
+		mutex_unlock(&chip->glink_lock);
+		return ret;
+	}
+	ret = wait_for_completion_timeout(&chip->glink_ack,
+					  msecs_to_jiffies(2500)) ? 0 : -ETIMEDOUT;
+	mutex_unlock(&chip->glink_lock);
+	return ret;
+}
 
 /*
  * Vendor power-on (init_work_func after firmware check):
@@ -242,6 +305,13 @@ static void cps8601_init_work(struct work_struct *work)
 	int ret, tries;
 
 	__pm_stay_awake(chip->ws);
+
+	/* power the coil rail through the ADSP before touching the MCU */
+	ret = cps8601_hboost_req(chip, CPS8601_HBOOST_ATTACH_CODE);
+	if (ret)
+		dev_warn(chip->dev, "hboost rail request failed: %d\n", ret);
+	msleep(500);
+
 	cps8601_power_on(chip);
 
 	for (tries = 0; tries < 5; tries++) {
@@ -442,6 +512,16 @@ static int cps8601_probe(struct i2c_client *client)
 		return dev_err_probe(dev, chip->irq, "no irq for int line\n");
 
 	/* the IRQ itself is requested from init_work once the chip is ready */
+
+	init_completion(&chip->glink_ack);
+	mutex_init(&chip->glink_lock);
+	chip->glink = devm_pmic_glink_client_alloc(dev, CPS8601_HBOOST_OWNER,
+						   cps8601_glink_cb,
+						   cps8601_glink_pdr, chip);
+	if (IS_ERR(chip->glink))
+		chip->glink = NULL;
+	else
+		pmic_glink_client_register(chip->glink);
 
 	chip->ws = wakeup_source_register(dev, "cps8601");
 	INIT_WORK(&chip->init_work, cps8601_init_work);
