@@ -66,7 +66,7 @@ struct cps8601 {
 	struct gpio_desc	*int_gpiod;
 	struct gpio_desc	*sleep_gpiod;
 	struct gpio_desc	*scan_gpiod;
-	struct gpio_desc	*off_state_gpiod;
+	struct gpio_desc	*boost_en_gpiod;
 	struct gpio_desc	*sw_en_gpiod;
 
 	struct work_struct	init_work;
@@ -113,7 +113,8 @@ static void cps8601_power_off(struct cps8601 *chip)
 	regmap_set_bits(chip->regmap, CPS8601_REG_CTRL, 0x10);
 	gpiod_set_value(chip->sw_en_gpiod, 0);
 	gpiod_set_value(chip->sleep_gpiod, 0);
-	gpiod_set_value(chip->off_state_gpiod, 1);
+	gpiod_set_value(chip->scan_gpiod, 0);
+	gpiod_set_value(chip->boost_en_gpiod, 0);
 }
 
 static void cps8601_scan(struct cps8601 *chip)
@@ -128,6 +129,8 @@ static int cps8601_read16(struct cps8601 *chip, u16 reg, u16 *val)
 	unsigned int v;
 	int ret;
 
+	/* multi-byte values are big-endian: the first register carries
+	 * the high byte (chip id reads back 0x86,0x01 -> 0x8601) */
 	ret = regmap_read(chip->regmap, reg, &v);
 	if (ret)
 		return ret;
@@ -143,6 +146,7 @@ static int cps8601_write16(struct cps8601 *chip, u16 reg, u16 val)
 {
 	int ret;
 
+	/* big-endian like the reads */
 	ret = regmap_write(chip->regmap, reg, val >> 8);
 	if (ret)
 		return ret;
@@ -413,10 +417,10 @@ static int cps8601_probe(struct i2c_client *client)
 	chip->int_gpiod = devm_gpiod_get(dev, "int", GPIOD_IN);
 	chip->sleep_gpiod = devm_gpiod_get(dev, "sleep", GPIOD_OUT_LOW);
 	chip->scan_gpiod = devm_gpiod_get(dev, "scan", GPIOD_OUT_LOW);
-	chip->off_state_gpiod = devm_gpiod_get(dev, "off-state", GPIOD_OUT_LOW);
+	chip->boost_en_gpiod = devm_gpiod_get(dev, "boost-en", GPIOD_OUT_LOW);
 	chip->sw_en_gpiod = devm_gpiod_get(dev, "sw-en", GPIOD_OUT_LOW);
 	if (IS_ERR(chip->int_gpiod) || IS_ERR(chip->sleep_gpiod) ||
-	    IS_ERR(chip->scan_gpiod) || IS_ERR(chip->off_state_gpiod) ||
+	    IS_ERR(chip->scan_gpiod) || IS_ERR(chip->boost_en_gpiod) ||
 	    IS_ERR(chip->sw_en_gpiod))
 		return dev_err_probe(dev, -EINVAL, "control gpio missing\n");
 
