@@ -118,6 +118,13 @@
 #define SC820CS_FETCH_MIRROR(v, en)	((en) ? ((v) | 0x06) : ((v) & 0xf9))
 #define SC820CS_FETCH_FLIP(v, en)	((en) ? ((v) | 0x60) : ((v) & 0x9f))
 
+/* See the HFLIP/VFLIP case in sc820cs_set_ctrl(): nonzero makes the
+ * control path write this exact value to 0x3221 so candidate flip
+ * encodings can be swept at runtime. */
+static unsigned int reg_3221_override;
+module_param(reg_3221_override, uint, 0644);
+MODULE_PARM_DESC(reg_3221_override, "raw value forced into 0x3221 at stream setup (0 = normal RMW)");
+
 /* Test pattern: 0x4501 BIT(3) enables color bars.  Derived from SC8238;
  * the caihong driver does not exercise this register, so the encoding is
  * unverified on SC820CS.  待硬件验证. */
@@ -362,6 +369,19 @@ static int sc820cs_set_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_HFLIP:
 	case V4L2_CID_VFLIP:
+		/*
+		 * Laboratory override: writing a nonzero reg_3221 to the
+		 * module parameter makes the flip path write that exact
+		 * value instead of the read-modify-write, so candidate
+		 * bits (single bits of 0x3221, or other registers after
+		 * extending SC820CS_REG_FLIP_MIRROR) can be swept at
+		 * runtime without a rebuild.  Zero keeps normal behaviour.
+		 */
+		if (reg_3221_override) {
+			cci_write(sc820cs->regmap, SC820CS_REG_FLIP_MIRROR,
+				  reg_3221_override, &ret);
+			break;
+		}
 		ret = cci_read(sc820cs->regmap, SC820CS_REG_FLIP_MIRROR,
 			       &read_val, NULL);
 		if (ret)
