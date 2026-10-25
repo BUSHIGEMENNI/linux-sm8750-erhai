@@ -849,7 +849,9 @@ int sc8547a_pps_snapshot(int *vbus_mv, int *vbat_mv, int *ibus_ma)
 	vbus = sc8547_get_vbus(sc);
 	vbat = sc8547_get_vbat(sc);
 	ibus = sc8547_get_ibus(sc);
-	if (vbus < 0 || vbat < 0)
+	/* All three share the same contract: a failed read fails the call
+	 * instead of being published as a negative sample. */
+	if (vbus < 0 || vbat < 0 || ibus < 0)
 		return -EIO;
 	if (vbus_mv)
 		*vbus_mv = vbus;
@@ -2123,6 +2125,13 @@ static void sc8547_auto_identify_tick(struct sc8547a_device *sc)
 	 */
 	vbat = sc8547_get_vbat(sc);
 	vref = (cell_mv > SC8547_CELL_MIN_VALID_MV) ? cell_mv : vbat;
+	/* A failed CP ADC read leaves vref negative; indexing the curve with
+	that errno would pick the highest-current row (index 0) and engage
+	the pump flat out.  Refuse the tick instead. */
+	if (vref <= 0) {
+		sc8547_auto_decline(sc, "CP voltage unreadable");
+		return;
+	}
 	if (vref >= SC8547_VBAT_CV_CEILING_MV) {
 		sc8547_auto_decline(sc, "vbat at CV already");
 		return;
