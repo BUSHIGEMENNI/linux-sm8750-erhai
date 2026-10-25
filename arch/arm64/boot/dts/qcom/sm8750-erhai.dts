@@ -2791,3 +2791,22 @@
 		};
 	};
 };
+
+/* Crash record capture for the intermittent early-boot wedge: the kernel
+ * has CONFIG_PSTORE_RAM=y but no region, so forced reboots leave nothing in
+ * /sys/fs/pstore.  Park 1 MiB at the top of the last System RAM block
+ * (0xbfff00000..0xbffffffff per /proc/iomem); warm resets (panic, watchdog,
+ * reboot -f) survive there and cold boots simply start empty. */
+/ {
+	reserved-memory {
+		ramoops@bfff00000 {
+			compatible = "ramoops";
+			reg = <0xb 0xfff00000 0x0 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			ftrace-size = <0x0>;
+			pmsg-size = <0x20000>;
+			ecc-size = <0x0>;
+		};
+	};
+};
