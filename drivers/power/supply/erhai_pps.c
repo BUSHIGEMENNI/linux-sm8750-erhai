@@ -989,8 +989,12 @@ static void pps_poll(struct erhai_pps *p)
 			pps_exit(p, PPS_EXIT_REASON_VOOC_ENGAGED);
 			return;
 		}
-		/* adapter vanished or no longer deployable -> back to idle */
-		p->state = PPS_IDLE;
+		/* adapter vanished or no longer deployable -> back to idle.
+		 * Go through pps_enter() like every other transition: the bare
+		 * assignment skipped the transition log, left last_reason
+		 * stale and never refreshed state_since, so the debugfs view
+		 * disagreed with the engine's actual state. */
+		pps_enter(p, PPS_IDLE, NULL);
 		return;
 	}
 	case PPS_NEGOTIATE: {
