@@ -337,8 +337,17 @@ static void cn3927_remove(struct i2c_client *client)
 	struct cn3927_device *cn3927 = to_cn3927(subdev);
 
 	pm_runtime_disable(&client->dev);
-	if (!pm_runtime_status_suspended(&client->dev))
-		cn3927_runtime_suspend(&client->dev);
+	if (!pm_runtime_status_suspended(&client->dev)) {
+		/* ->runtime_suspend only cuts the rail when the park loop
+		 * completes; a failed park returns -EBUSY (so the PM core
+		 * retries) and leaves both supplies enabled.  There is no
+		 * retry on the remove path, so balance the count here or
+		 * devm's regulator_put() warns on a non-zero enable_count
+		 * and the rails stay powered. */
+		if (cn3927_runtime_suspend(&client->dev))
+			regulator_bulk_disable(ARRAY_SIZE(cn3927->supplies),
+					       cn3927->supplies);
+	}
 	pm_runtime_set_suspended(&client->dev);
 	cn3927_cleanup(cn3927);
 }
