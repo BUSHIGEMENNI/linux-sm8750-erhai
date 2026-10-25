@@ -2732,9 +2732,15 @@
 
 		/* Honest FRONT: apps mirror the selfie preview themselves and
 		 * keep captures un-mirrored (TheMojoMan's measured Snapshot
-		 * behaviour, his ed20467e4). */
+		 * behaviour, his ed20467e4).
+		 *
+		 * rotation=180: the 0x3221 flip/mirror bits (0x00/0x60/0x66
+		 * all tried, 2026-10-25) shift the Bayer phase but do NOT
+		 * rotate this sensor's output geometry, so the 180° mount
+		 * correction happens in software — libcamera reads this
+		 * property into the stream orientation. */
 		orientation = <0>;
-		rotation = <0>;
+		rotation = <180>;
 
 		reset-gpios = <&tlmm 7 GPIO_ACTIVE_LOW>;
 
