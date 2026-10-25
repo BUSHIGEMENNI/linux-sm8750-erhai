@@ -5905,24 +5905,6 @@ static const struct camss_subdev_resources vfe_res_sm8750[] = {
 	},
 };
 
-static const struct resources_icc icc_res_sm8750[] = {
-	{
-		.name = "ahb",
-		.icc_bw_tbl.avg = 2097152,
-		.icc_bw_tbl.peak = 3000000,
-	},
-	{
-		.name = "cam_hf",
-		.icc_bw_tbl.avg = 2097152,
-		.icc_bw_tbl.peak = 3000000,
-	},
-	{
-		.name = "cam_sf",
-		.icc_bw_tbl.avg = 2097152,
-		.icc_bw_tbl.peak = 3000000,
-	},
-};
-
 static const struct camss_resources sm8750_resources = {
 	.version = CAMSS_8750,
 	.pd_name = "top",
@@ -5930,8 +5912,8 @@ static const struct camss_resources sm8750_resources = {
 	.csid_res = csid_res_sm8750,
 	.csid_wrapper_res = NULL,
 	.vfe_res = vfe_res_sm8750,
-	.icc_res = icc_res_sm8750,
-	.icc_path_num = ARRAY_SIZE(icc_res_sm8750),
+	.icc_res = NULL,
+	.icc_path_num = 0,
 	.csiphy_num = ARRAY_SIZE(csiphy_res_sm8750),
 	.csid_num = ARRAY_SIZE(csid_res_sm8750),
 	.vfe_num = ARRAY_SIZE(vfe_res_sm8750),

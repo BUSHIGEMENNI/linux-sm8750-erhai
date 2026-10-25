@@ -1124,17 +1124,6 @@ int msm_csid_subdev_init(struct camss *camss, struct csid_device *csid,
 		else
 			csid->base = csid->res->parent_dev_ops->get_base_address(camss, id)
 				 + VFE_480_CSID_OFFSET;
-	} else if (camss->res->version == CAMSS_8750) {
-		/* sm8750 (sun): csid-lite980 and vfe-lite98x share ONE window
-		 * (lite0 = 0xad6d000, lite1 = 0xad72000 per the live Android
-		 * DT), csid at offset 0 of the 0x2800 vfe window.  Two
-		 * devm_platform_ioremap_resource_byname() calls on the same
-		 * window fight over the mem_region, so borrow the vfe mapping
-		 * instead — vfe is initialized before csid for every sm8250+
-		 * generation. */
-		csid->base = csid->res->parent_dev_ops->get_base_address(camss, id);
-		if (!csid->base)
-			return -ENODEV;
 	} else {
 		csid->base = devm_platform_ioremap_resource_byname(pdev, res->reg[0]);
 		if (IS_ERR(csid->base))
