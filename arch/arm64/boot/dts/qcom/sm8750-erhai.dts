@@ -2297,3 +2297,80 @@
 		};
 	};
 };
+
+/*
+ * Camera stage-1 bring-up: front sensor SmartSens SC820CS on the plain
+ * QUP2 SE1 I2C bus (not CCI - the vendor tree wires the front camera to
+ * qupv3_se9_i2c, gpio4 SDA / gpio5 SCL, which is mainline i2c9).
+ *
+ * Hardware facts from the vendor erhai_camera_overlay_common_evb.dtsi
+ * (extracted in ~/erhai-pen/sc820cs-notes.md):
+ *   RESET4 = tlmm gpio7, MCLK4 = tlmm gpio93 @ 19.2 MHz
+ *   (cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK; the 19.2 MHz tap exists in
+ *   its freq table straight off bi_tcxo_div2: xo 76.8M -> rpmhcc div2
+ *   38.4M -> dtsi div2 19.2M).
+ * Regulator mapping from the vendor DT (also recorded in the driver
+ * header comment, drivers/media/i2c/sc820cs.c):
+ *   DOVDD 1.8 V = L4B, AVDD 2.8 V = L16B, DVDD 1.2 V = L11B.
+ *
+ * reset-gpios is ACTIVE_HIGH on purpose: the driver drives the line with
+ * plain logic levels (gpiod_set_value(0) holds reset, 1 releases it) and
+ * the sensor reset input is active-low, so the logical value must equal
+ * the physical level.  GPIO_ACTIVE_LOW would invert the sequence.
+ *
+ * Bring-up TODOs:
+ *   - I2C address: vendor notes say 0x20, caihong measured 0x10 on its
+ *     (CCI) bus; confirm with i2cdetect on i2c-9 and fix reg plus the
+ *     unit address if needed.
+ *   - CSI hookup: sm8750 CAMSS has no mainline nodes in this tree yet,
+ *     so sc820cs_out has no remote-endpoint.  Once csiphy5/csid nodes
+ *     land, point it at the csiphy5 endpoint (4 D-PHY lanes).
+ */
+&gpi_dma2 {
+	status = "okay";
+};
+
+&tlmm {
+	cam_mclk4_default: cam-mclk4-default-state {
+		pins = "gpio93";
+		function = "cam_aon_mclk4";
+		drive-strength = <2>;
+		bias-disable;
+	};
+};
+
+&i2c9 {
+	status = "okay";
+
+	front_cam: camera@20 {
+		compatible = "smartsens,sc820cs";
+		reg = <0x20>;
+
+		reset-gpios = <&tlmm 7 GPIO_ACTIVE_HIGH>;
+
+		dovdd-supply = <&vreg_l4b_1p8>;
+		avdd-supply = <&vreg_l16b_2p8>;
+		dvdd-supply = <&vreg_l11b_1p0>;
+
+		clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK>;
+		assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK_SRC>;
+		assigned-clock-rates = <19200000>;
+
+		pinctrl-0 = <&cam_mclk4_default>;
+		pinctrl-names = "default";
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+
+				sc820cs_out: endpoint {
+					data-lanes = <1 2 3 4>;
+					link-frequencies = /bits/ 64 <366000000>;
+				};
+			};
+		};
+	};
+};
