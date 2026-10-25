@@ -448,8 +448,14 @@ static int sc820cs_init_controls(struct sc820cs *sc820cs)
 	if (sc820cs->hflip)
 		sc820cs->hflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
 
+	/*
+	 * The module sits 180 degrees from the natural readout; V-flip ON
+	 * (Android streams 0x3221=0x66) is the correct default.  Without
+	 * it the Bayer row order inverts and the soft ISP demosaics a
+	 * green cast on top of the upside-down image.
+	 */
 	sc820cs->vflip = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
-					   V4L2_CID_VFLIP, 0, 1, 1, 0);
+					   V4L2_CID_VFLIP, 0, 1, 1, 1);
 	if (sc820cs->vflip)
 		sc820cs->vflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
 
@@ -519,18 +525,6 @@ static int sc820cs_enable_streams(struct v4l2_subdev *sd,
 		dev_err(&client->dev, "failed to write mode registers\n");
 		goto err_rpm_put;
 	}
-
-	/*
-	 * 0x3221[6:5]=V-flip, [2:1]=H-mirror.  Android streams 0x66
-	 * (V-flip ON, mirror off): the module is mounted 180° from the
-	 * natural readout, and without the flip the Bayer row order is
-	 * inverted too, which the soft ISP demosaics as a green cast.
-	 * One write fixes both the upside-down image and the cast.
-	 */
-	ret = cci_write(sc820cs->regmap, SC820CS_REG_FLIP_MIRROR, 0x66,
-			NULL);
-	if (ret)
-		goto err_rpm_put;
 
 	/* Apply controls (exposure/gain/timing) on top of the mode list */
 	ret = __v4l2_ctrl_handler_setup(sc820cs->sd.ctrl_handler);
