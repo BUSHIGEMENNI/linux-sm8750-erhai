@@ -2313,10 +2313,11 @@
  * header comment, drivers/media/i2c/sc820cs.c):
  *   DOVDD 1.8 V = L4B, AVDD 2.8 V = L16B, DVDD 1.2 V = L11B.
  *
- * reset-gpios is ACTIVE_HIGH on purpose: the driver drives the line with
- * plain logic levels (gpiod_set_value(0) holds reset, 1 releases it) and
- * the sensor reset input is active-low, so the logical value must equal
- * the physical level.  GPIO_ACTIVE_LOW would invert the sequence.
+ * reset-gpios is ACTIVE_LOW because the sensor reset input is active-low
+ * and the driver uses proper gpiod logical semantics (set_value(1)
+ * asserts, set_value(0) releases; consumer.rst active_low_semantics).
+ * Never describe this line with raw physical levels again - reasoning in
+ * physical levels is exactly what inverted the sequence twice.
  *
  * Bring-up TODOs:
  *   - I2C address: vendor notes say 0x20, caihong measured 0x10 on its
