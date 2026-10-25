@@ -520,6 +520,18 @@ static int sc820cs_enable_streams(struct v4l2_subdev *sd,
 		goto err_rpm_put;
 	}
 
+	/*
+	 * 0x3221[6:5]=V-flip, [2:1]=H-mirror.  Android streams 0x66
+	 * (V-flip ON, mirror off): the module is mounted 180° from the
+	 * natural readout, and without the flip the Bayer row order is
+	 * inverted too, which the soft ISP demosaics as a green cast.
+	 * One write fixes both the upside-down image and the cast.
+	 */
+	ret = cci_write(sc820cs->regmap, SC820CS_REG_FLIP_MIRROR, 0x66,
+			NULL);
+	if (ret)
+		goto err_rpm_put;
+
 	/* Apply controls (exposure/gain/timing) on top of the mode list */
 	ret = __v4l2_ctrl_handler_setup(sc820cs->sd.ctrl_handler);
 	if (ret)
