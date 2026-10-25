@@ -211,9 +211,9 @@ static const s64 sc820cs_link_freq_menu[] = {
 /* Bayer order: base BGGR (待硬件验证), rotated by mirror/flip.
  * Order: no flip, hflip, vflip, h+v flip. */
 static const u32 sc820cs_mbus_formats[] = {
-	MEDIA_BUS_FMT_SRGGB10_1X10,
+	MEDIA_BUS_FMT_SBGGR10_1X10,
 	MEDIA_BUS_FMT_SGBRG10_1X10,
-	MEDIA_BUS_FMT_SRGGB10_1X10,
+	MEDIA_BUS_FMT_SBGGR10_1X10,
 	MEDIA_BUS_FMT_SGRBG10_1X10,
 };
 
@@ -453,9 +453,10 @@ static int sc820cs_init_controls(struct sc820cs *sc820cs)
 	 * 0x00 -> 0x66 is a true 180-degree rotation of the readout, and the
 	 * 0x66 state is the one that comes out upside-down on this module —
 	 * so the un-flipped POR state is upright.  Default both flips OFF;
-	 * the rotated readout also moves the Bayer start, so the mbus code
-	 * below is SRGGB at 0x00 (the SBGGR layout belongs to the 0x66
-	 * state, phase-verified with a known-color object).
+	 * the rotated readout also moves the Bayer start.  Every colour
+	 * observation the user made (yellow->blue, blue-black) was under the
+	 * SBGGR report in the 0x66 state, so that state is really RGGB and
+	 * the phase at 0x00 is SBGGR.
 	 */
 	sc820cs->vflip = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
 					   V4L2_CID_VFLIP, 0, 1, 1, 0);
@@ -704,7 +705,7 @@ static int sc820cs_init_state(struct v4l2_subdev *sd,
 		.which = V4L2_SUBDEV_FORMAT_TRY,
 		.pad = 0,
 		.format = {
-			.code = MEDIA_BUS_FMT_SRGGB10_1X10,
+			.code = MEDIA_BUS_FMT_SBGGR10_1X10,
 			.width = supported_modes[0].width,
 			.height = supported_modes[0].height,
 		},
