@@ -1071,8 +1071,11 @@ static void cps8601_remove(struct i2c_client *client)
 {
 	struct cps8601 *chip = i2c_get_clientdata(client);
 
+	/* Drop the rail request while the glink client still routes ACKs:
+	 * neuter() clears the callback and priv, so a request issued after it
+	 * waits out every retry (~30 s) even though the send succeeds. */
 	if (chip->pgclient)
-		pmic_glink_client_neuter(chip->pgclient);
+		cps8601_hboost_req(chip, 0);
 	cancel_work_sync(&chip->init_work);
 	cancel_work_sync(&chip->attach_work);
 	cancel_delayed_work_sync(&chip->ready_work);
@@ -1086,7 +1089,8 @@ static void cps8601_remove(struct i2c_client *client)
 		cps8601_power_off(chip);
 	else
 		gpiod_set_value(chip->sw_en_gpiod, 0);
-	cps8601_hboost_req(chip, 0);
+	if (chip->pgclient)
+		pmic_glink_client_neuter(chip->pgclient);
 }
 
 static const struct of_device_id cps8601_of_match[] = {
