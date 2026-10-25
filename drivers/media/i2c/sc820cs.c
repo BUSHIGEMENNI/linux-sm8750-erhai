@@ -128,14 +128,18 @@
 /* 19.2 MHz MCLK4, per the erhai vendor DT clock-rates property */
 #define SC820CS_XCLK_FREQ		19200000
 
-/* 4 data lanes, RAW10, link frequency 366 MHz => 732 Mbps/lane (DDR).
- * The vendor 3888 x 2500 mode runs at 24 fps, so the pixel rate is
- * 3888 * 2500 * 24 = 233.28 MHz.  Values hardware-verified on caihong;
- * erhai uses the same module generation.  0x301f = 0x0e in the vendor
- * table is the 4-lane lane-mode value, replacing the earlier 2-lane
- * 720 MHz assumption.  待硬件验证 on erhai. */
+/* 4 data lanes, RAW10, link frequency 368 MHz => 736 Mbps/lane (DDR).
+ * Ground truth for the link rate: Android CAM_START_PHYDEV for PHY-5 on
+ * this tablet reports Datarate 736000000/lane, and TheMojoMan's verified
+ * Pad 3 tree (same module) ships the same 368 MHz figure — this replaces
+ * the earlier 366 MHz borrowed from caihong, which was never verified on
+ * erhai.  camss derives the CSIPHY settle count from
+ * V4L2_CID_LINK_FREQ, so the DT link-frequencies property must carry
+ * this same value (check_hwcfg rejects anything else).  The pixel rate
+ * stays at the caihong-measured 3888 * 2500 * 24 = 233.28 MHz.
+ * 0x301f = 0x0e in the vendor table is the 4-lane lane-mode value. */
 #define SC820CS_NUM_DATA_LANES		4
-#define SC820CS_LINK_FREQ		366000000ULL
+#define SC820CS_LINK_FREQ		368000000ULL
 #define SC820CS_PIXEL_RATE		233280000ULL
 
 #define SC820CS_NATIVE_WIDTH		3264U
