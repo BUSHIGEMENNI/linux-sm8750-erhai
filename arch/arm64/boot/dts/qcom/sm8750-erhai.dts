@@ -2387,6 +2387,11 @@
 				pinctrl-names = "default";
 				pinctrl-0 = <&cam_rear_mclk_default>;
 
+				/* The MCLK gates live inside TITAN_TOP_GDSC: without the
+				 * domain on, the branch is hw-protected and
+				 * clk_prepare_enable returns -EBUSY. */
+				power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
+
 				reset-gpios = <&pm8550ve_i_gpios 5 GPIO_ACTIVE_LOW>;
 
 				/* Rear-facing module. */
