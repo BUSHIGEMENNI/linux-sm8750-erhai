@@ -813,10 +813,18 @@ static int sc820cs_power_off(struct device *dev)
 static int sc820cs_identify_module(struct sc820cs *sc820cs)
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&sc820cs->sd);
-	int ret;
+	int ret, i;
 	u64 val;
 
-	ret = cci_read(sc820cs->regmap, SC820CS_REG_CHIP_ID, &val, NULL);
+	/* the first transaction right after reset release can race the
+	 * sensor's boot ROM; 8 x 20 ms is the verified recipe from the
+	 * Pad 3 tree (probe + GNOME Snapshot stream, commit ed20467e) */
+	for (i = 0; i < 8; i++) {
+		ret = cci_read(sc820cs->regmap, SC820CS_REG_CHIP_ID, &val, NULL);
+		if (!ret)
+			break;
+		usleep_range(20000, 25000);
+	}
 	if (ret)
 		return dev_err_probe(&client->dev, ret,
 				     "failed to read chip id (%#x)\n",

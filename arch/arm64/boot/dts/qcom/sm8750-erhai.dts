@@ -2343,9 +2343,12 @@
 &i2c9 {
 	status = "okay";
 
-	front_cam: camera@20 {
+	/* 7-bit address.  The vendor dtbo's 0x20 is the 8-bit WRITE address
+	 * form; the sensor only ACKs its 7-bit address 0x10 on Linux (same
+	 * finding as TheMojoMan's verified Pad 3 tree). */
+	front_cam: camera-sensor@10 {
 		compatible = "smartsens,sc820cs";
-		reg = <0x20>;
+		reg = <0x10>;
 
 		reset-gpios = <&tlmm 7 GPIO_ACTIVE_LOW>;
 
