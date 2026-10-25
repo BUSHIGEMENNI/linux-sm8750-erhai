@@ -514,7 +514,14 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
 	.pad = &sc1320cs_pad_ops,
 };
 
-/* Mode timing (from sc1320cs_mode_4160x3120): VTS 0x1904, HTS 0x04e2. */
+/* Mode timing (from sc1320cs_mode_4160x3120): VTS 0x1904, HTS 0x04e2.
+ *
+ * HTS comes straight out of the mode table and is NOT the "leftover after
+ * the active width" that V4L2_CID_HBLANK usually means: 0x04e2 = 1250 is
+ * smaller than the 4160-pixel line, so (width + hblank) is not a line
+ * length and must not be read as one.  The control is therefore exposed
+ * READ_ONLY with min == max rather than being "fixed" to HTS - width,
+ * which would fabricate a number; the register's unit is unconfirmed. */
 #define SC1320CS_VTS_DEF	6404
 #define SC1320CS_HBLANK		1250
 #define SC1320CS_VBLANK_MIN	32
@@ -524,6 +531,17 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
 #define SC1320CS_EXPOSURE_MAX	(SC1320CS_VTS_DEF - 8)
 #define SC1320CS_EXPOSURE_DEF	0x18f
 #define SC1320CS_AGAIN_MAX	255
+
+/* Pixel rate: two methods disagree by ~2x and neither is verified on the
+ * bench, so both are recorded here instead of silently picking one.
+ *   link bandwidth: 600 MHz DDR x 2 bits x 4 lanes / 10 bpp = 480 MHz
+ *   mode timing:    6404 VTS x 1250 HTS x 30 fps          = 240 MHz
+ * The formula below (link bandwidth) is what libcamera consumes to turn
+ * exposure lines into seconds; with the timing figure it would be off by
+ * 2x.  libcamera's soft IPA does not currently drive this sensor's
+ * exposure, so nothing is derived from it yet -- mark it verified before
+ * any AE work starts (see LESSONS #52 on measuring rather than inferring).
+ */
 
 /*
  * Exposure/gain/blanking controls are exposed with valid ranges (libcamera's
