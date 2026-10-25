@@ -626,9 +626,11 @@ static int cci_probe(struct platform_device *pdev)
 	{
 		struct icc_path *ahb = devm_of_icc_get(dev, "ahb");
 
-		if (IS_ERR(ahb))
-			return dev_err_probe(dev, PTR_ERR(ahb),
-					     "failed to get 'ahb' interconnect\n");
+		if (IS_ERR(ahb)) {
+			ret = dev_err_probe(dev, PTR_ERR(ahb),
+					    "failed to get 'ahb' interconnect\n");
+			goto disable_clocks;
+		}
 		if (ahb) {
 			ret = icc_set_bw(ahb, 76800, 300000);
 			if (ret < 0) {
@@ -657,10 +659,12 @@ static int cci_probe(struct platform_device *pdev)
 		for (mi = 0; mi < ARRAY_SIZE(mnoc_names); mi++) {
 			struct icc_path *p = devm_of_icc_get(dev, mnoc_names[mi]);
 
-			if (IS_ERR(p))
-				return dev_err_probe(dev, PTR_ERR(p),
+			if (IS_ERR(p)) {
+				ret = dev_err_probe(dev, PTR_ERR(p),
 					"failed to get '%s' interconnect\n",
 					mnoc_names[mi]);
+				goto disable_clocks;
+			}
 			if (!p)
 				continue;
 			ret = icc_set_bw(p, 0, 3000000);

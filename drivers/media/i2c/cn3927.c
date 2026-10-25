@@ -194,17 +194,21 @@ static int cn3927_runtime_suspend(struct device *dev)
 	struct cn3927_device *cn3927 = to_cn3927(subdev);
 	int focus;
 	int err;
-	int ret = 0;
 
 	focus = cn3927->focus & ~(CN3927_PARK_STEP - 1);
 	if (focus < CN3927_PARK_POSITION)
 		focus = CN3927_PARK_POSITION;
 
+	/* Park before cutting the rail.  A failed park leaves the supplies
+	 * on and the error propagates, so the PM core keeps the device
+	 * active: a later resume (and therefore the next focus write) can
+	 * still reach the hardware.  Returning an error after disabling the
+	 * rail would strand the device as "active but unpowered". */
 	for (; focus >= CN3927_PARK_POSITION; focus -= CN3927_PARK_STEP) {
 		err = cn3927_set_focus(cn3927, focus);
+		if (err)
+			return err;
 
-		if (err && !ret)
-			ret = err;
 		usleep_range(CN3927_MOVE_DELAY_US,
 			     CN3927_MOVE_DELAY_US + 100);
 	}
@@ -212,7 +216,7 @@ static int cn3927_runtime_suspend(struct device *dev)
 	regulator_bulk_disable(ARRAY_SIZE(cn3927->supplies),
 			       cn3927->supplies);
 
-	return ret;
+	return 0;
 }
 
 static int cn3927_runtime_resume(struct device *dev)
