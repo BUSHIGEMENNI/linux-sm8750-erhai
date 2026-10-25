@@ -85,6 +85,16 @@ module_param(adsp_fastchg_svooc_min, uint, 0644);
 MODULE_PARM_DESC(adsp_fastchg_svooc_min,
 		 "ADSP fast-charge type >= this counts as VOOC-family (default 2)");
 
+static unsigned int adsp_real_type_prop = 11;	/* USB_REAL_TYPE (erhai_pps parity) */
+module_param(adsp_real_type_prop, uint, 0644);
+MODULE_PARM_DESC(adsp_real_type_prop,
+		 "ADSP USB property id for USB_REAL_TYPE (default 11)");
+
+static unsigned int adsp_vooc_real_type = 9;	/* VOOC family per lab records (PPS=8) */
+module_param(adsp_vooc_real_type, uint, 0644);
+MODULE_PARM_DESC(adsp_vooc_real_type,
+		 "USB_REAL_TYPE value that counts as VOOC evidence (default 9)");
+
 /*
  * Battery gauge used as the CELL-voltage reference by the SVOOC CC/CV policy.
  * Two erhai populations exist and BOTH must fast-charge:
@@ -2003,7 +2013,9 @@ static void sc8547_auto_reservo(struct sc8547a_device *sc)
 static bool sc8547_auto_identify_retry(struct sc8547a_device *sc)
 {
 	bool adsp_vooc = false;
+	bool real_vooc = false;
 	int ft = -ENODEV;
+	int rt = -ENODEV;
 
 	if (sc->auto_ident_retries >= identify_retries)
 		return false;
@@ -2019,22 +2031,41 @@ static bool sc8547_auto_identify_retry(struct sc8547a_device *sc)
 	}
 
 	/*
-	 * Only keep the ladder alive on VOOC evidence: an ADSP VOOC-family
-	 * verdict (Android's is_pd_svooc_adapter / sid_power) or actual VOOC
-	 * serial frames.  A plain PD/5 V charger has neither and declines on
-	 * the FIRST window — identical to the old single-shot behaviour, so
-	 * D+/D- and normal charging are not held hostage by the retry loop.
+	 * erhai: the ADSP never runs a VOOC session, so prop26 stays 0 and
+	 * adsp_vooc alone starves the ladder.  But the ADSP still classifies
+	 * the brick on its own DPDM leg — USB_REAL_TYPE in the VOOC family
+	 * (9 on this board; PPS heads read 8) — and that verdict must count
+	 * as evidence, or the serial ladder gets a single 4 s window and
+	 * identify_retries is dead weight (vooc-debug 调试笔记 §5).
 	 */
-	if (!adsp_vooc && !sc->vooc_saw_any) {
+	if (adsp_classify) {
+		rt = erhai_otg_adsp_usb_prop(adsp_real_type_prop);
+		real_vooc = rt == adsp_vooc_real_type;
+		if (rt >= 0)
+			dev_info(sc->dev,
+				 "slow adapter: USB real_type %d (%s)\n",
+				 rt, real_vooc ? "VOOC family" : "not VOOC");
+	}
+
+	/*
+	 * Only keep the ladder alive on VOOC evidence: an ADSP VOOC-family
+	 * verdict (Android's is_pd_svooc_adapter / sid_power), the ADSP
+	 * real_type VOOC family, or actual VOOC serial frames.  A plain
+	 * PD/5 V charger has neither and declines on the FIRST window —
+	 * identical to the old single-shot behaviour, so D+/D- and normal
+	 * charging are not held hostage by the retry loop.
+	 */
+	if (!adsp_vooc && !real_vooc && !sc->vooc_saw_any) {
 		dev_info(sc->dev,
-			 "no VOOC evidence (adsp %d, frames %d) — declining\n",
-			 ft, sc->vooc_saw_any);
+			 "no VOOC evidence (adsp %d, real %d, frames %d) — declining\n",
+			 ft, rt, sc->vooc_saw_any);
 		return false;
 	}
 
 	dev_info(sc->dev, "slow adapter%s: re-arming identify %d/%u\n",
 		 adsp_vooc ? " (ADSP VOOC)" :
-		 (sc->vooc_saw_any ? " (serial frames)" : ""),
+		 (real_vooc ? " (real_type VOOC)" :
+		 (sc->vooc_saw_any ? " (serial frames)" : "")),
 		 sc->auto_ident_retries + 1, identify_retries);
 
 	sc->auto_ident_retries++;

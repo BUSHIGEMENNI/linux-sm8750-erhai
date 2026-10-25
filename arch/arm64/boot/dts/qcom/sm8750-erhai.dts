@@ -2269,8 +2269,9 @@
 		reg = <0 0x0ac7b000 0 0x1000>;
 		interrupts = <GIC_SPI 426 IRQ_TYPE_EDGE_RISING 0>;
 		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
-		clocks = <&camcc CAM_CC_CCI_0_CLK>;
-		clock-names = "cci";
+		clocks = <&camcc CAM_CC_CAM_TOP_AHB_CLK>,
+			 <&camcc CAM_CC_CCI_0_CLK>;
+		clock-names = "ahb", "cci";
 		assigned-clocks = <&camcc CAM_CC_CCI_0_CLK>;
 		assigned-clock-rates = <37500000>;
 		pinctrl-0 = <&cci0_default>;
