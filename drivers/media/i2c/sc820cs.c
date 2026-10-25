@@ -17,17 +17,36 @@
  * (rockchip-linux kernel develop-6.1 drivers/media/i2c/sc8238.c, GPL-2.0),
  * a sibling SmartClarity sensor using the same register layout.
  *
- * IMPORTANT - register tables are NOT the vendor values:
- * For the SM8750 ("sun") generation Qualcomm removed per-sensor drivers
- * from the kernel; the SC820CS resolution/PLL register arrays live in the
- * userspace camx sensor module (com.qti.sensor.sc820cs) which is not GPL
- * source.  The mode register lists below therefore contain the *window /
- * timing / MIPI lane* registers with computed values, but the vendor PLL
- * and analog tuning blocks are missing.  They are marked
- * "TODO(vendor-regs)" and MUST be transplanted from the userspace module
- * before valid frames can be expected on hardware.  待硬件验证.
+ * Register table status (TODO(vendor-regs) resolved):
+ * The full 116-entry power-up / PLL / analog tuning sequence for the
+ * 3264x2448 mode is transplanted from the OnePlus Pad Pro ("caihong",
+ * SM8650) downstream camera tree, via the out-of-tree driver at
+ * https://github.com/Osilvfe/out_tree_module (GPL-2.0-only, copyright
+ * (c) 2026 Osilvfe <osilvfe@gmail.com>), where it is hardware-verified
+ * to stream 3264x2448 RAW10 at 24 fps.  See sc820cs-caihong-regs.h.
+ * The exposure and analogue-gain register encodings below are taken from
+ * that driver as well.
+ *
+ * Cross-validation against the erhai odm blob
+ * (com.qti.sensormodule.erhaifront.bin): the caihong register sequence is
+ * a strict subsequence of the erhai register-write script, in identical
+ * order; erhai only adds 9 analog-tuning registers on top (see the regs
+ * header).  The register *values* of the erhai script are not decoded
+ * yet, and the erhai-specific tuning delta remains unverified.
+ *
+ * erhai board specifics that differ from caihong (board facts live in DT,
+ * not in this driver): DVDD rail is L11B (caihong: L2G), the sensor sits
+ * on QUP SE9 I2C rather than a CCI master, feeding csiphy5 (caihong:
+ * CSIPHY4).
+ *
+ * I2C address: the erhai vendor DT uses reg = <0x20>, but the caihong
+ * README reports the sensor answering at the Linux 7-bit address 0x10
+ * (0x20 would be its 8-bit write form).  The erhai DT keeps 0x20 for
+ * now; i2cdetect on QUP SE9 must settle 0x10 vs 0x20.  待硬件验证.
  *
  * Copyright (C) 2026 erhai mainline project
+ * Mode table and control encodings derived from the caihong SC820CS
+ * driver, Copyright (c) 2026 Osilvfe <osilvfe@gmail.com> (GPL-2.0-only)
  */
 
 #include <linux/clk.h>
@@ -44,6 +63,8 @@
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-mediabus.h>
 
+#include "sc820cs-caihong-regs.h"
+
 /* Chip ID: 16-bit value spread over 0x3107 (high) / 0x3108 (low).
  * 0xd154 verified against the erhai vendor DT "ftm_setting_compatible"
  * property which reads 2 bytes at 0x3107 and expects 0xd154. */
@@ -57,68 +78,65 @@
 #define SC820CS_MODE_STANDBY		0x00
 #define SC820CS_MODE_STREAMING		0x01
 
-/* Exposure: 16-bit line count packed over three registers
- * (0x3e00 = H nibble, 0x3e01 = M byte, 0x3e02 = L nibble << 4).
- * Same layout as SC8238. 待硬件验证 for SC820CS. */
+/* Exposure: line count, applied to the sensor in half-line units.
+ * encoded = lines * 2 is spread over four registers: 0x3e20 [23:20],
+ * 0x3e00 [19:12], 0x3e01 [11:4] and 0x3e02 [7:5] (written as
+ * (lines & 7) << 5).  Encoding as hardware-verified on caihong. */
+#define SC820CS_REG_EXPOSURE_20		CCI_REG8(0x3e20)
 #define SC820CS_REG_EXPOSURE_H		CCI_REG8(0x3e00)
 #define SC820CS_REG_EXPOSURE_M		CCI_REG8(0x3e01)
 #define SC820CS_REG_EXPOSURE_L		CCI_REG8(0x3e02)
-#define SC820CS_EXPOSURE_MIN		4
+#define SC820CS_EXPOSURE_MIN		1
 #define SC820CS_EXPOSURE_STEP		1
-#define SC820CS_EXPOSURE_DEFAULT	0x250
-#define SC820CS_EXPOSURE_OFFSET		8
+#define SC820CS_EXPOSURE_DEFAULT	750
+#define SC820CS_EXPOSURE_MARGIN		6
 
-/* Analog gain: 0x3e08 = coarse (range select), 0x3e09 = fine (7-bit).
- * Gain unit is 1/128: 128 = 1x, 1016 = 7.9375x analog ceiling.
- * Above that the digital gain registers 0x3e06/0x3e07 continue
- * (not exposed as a separate control here). 待硬件验证. */
+/* Analogue gain, 1/1024 units: 1024 = 1x .. 16384 = 16x.  The range is
+ * selected by a coarse code in 0x3e08 and a fine value in 0x3e07 counted
+ * in 1/128 of the selected range.  Encoding as hardware-verified on
+ * caihong. */
 #define SC820CS_REG_AGAIN_COARSE	CCI_REG8(0x3e08)
-#define SC820CS_REG_AGAIN_FINE		CCI_REG8(0x3e09)
-#define SC820CS_AGAIN_COARSE_1X		0x03
-#define SC820CS_AGAIN_COARSE_2X		0x07
-#define SC820CS_AGAIN_COARSE_4X		0x0f
-#define SC820CS_AGAIN_COARSE_8X		0x1f
-#define SC820CS_AGAIN_MIN		128
-#define SC820CS_AGAIN_MAX		1016
+#define SC820CS_REG_AGAIN_FINE		CCI_REG8(0x3e07)
+#define SC820CS_AGAIN_MIN		1024
+#define SC820CS_AGAIN_MAX		16384
 #define SC820CS_AGAIN_STEP		1
-#define SC820CS_AGAIN_DEFAULT		128
+#define SC820CS_AGAIN_DEFAULT		1024
 
-/* Frame timing */
-#define SC820CS_REG_HTS_H		CCI_REG8(0x320c)
-#define SC820CS_REG_HTS_L		CCI_REG8(0x320d)
-#define SC820CS_REG_VTS_H		CCI_REG8(0x320e)
-#define SC820CS_REG_VTS_L		CCI_REG8(0x320f)
-#define SC820CS_VTS_MAX			0x7fff
-#define SC820CS_VBLANK_MIN		8
-#define SC820CS_HTS_MIN			0x0e10
-
-/* Output window size */
-#define SC820CS_REG_OUT_WIDTH_H		CCI_REG8(0x3208)
-#define SC820CS_REG_OUT_WIDTH_L		CCI_REG8(0x3209)
-#define SC820CS_REG_OUT_HEIGHT_H	CCI_REG8(0x320a)
-#define SC820CS_REG_OUT_HEIGHT_L	CCI_REG8(0x320b)
+/* Frame timing: HTS @ 0x320c and VTS @ 0x320e, both 16-bit.  The vendor
+ * 3264x2448 mode runs HTS 3888 / VTS 2500 at 24 fps.  The mode register
+ * list does not program them (reset defaults + runtime control writes
+ * carry the verified values). */
+#define SC820CS_REG_HTS			CCI_REG16(0x320c)
+#define SC820CS_REG_VTS			CCI_REG16(0x320e)
+#define SC820CS_HTS_DEF			3888
+#define SC820CS_VTS_DEF			2500
+#define SC820CS_HTS_MAX			0xffff
+#define SC820CS_VTS_MAX			0xffff
 
 /* Mirror / flip: mirror bits [2:1], flip bits [6:5]. Same as SC8238. */
 #define SC820CS_REG_FLIP_MIRROR		CCI_REG8(0x3221)
 #define SC820CS_FETCH_MIRROR(v, en)	((en) ? ((v) | 0x06) : ((v) & 0xf9))
 #define SC820CS_FETCH_FLIP(v, en)	((en) ? ((v) | 0x60) : ((v) & 0x9f))
 
-/* Test pattern: 0x4501 BIT(3) enables color bars. */
+/* Test pattern: 0x4501 BIT(3) enables color bars.  Derived from SC8238;
+ * the caihong driver does not exercise this register, so the encoding is
+ * unverified on SC820CS.  待硬件验证. */
 #define SC820CS_REG_TEST_PATTERN	CCI_REG8(0x4501)
 #define SC820CS_TEST_PATTERN_BIT	BIT(3)
 #define SC820CS_TEST_PATTERN_DEF_VAL	0xa4
 
-/* PLL clock gates used around PLL reconfiguration in vendor tables */
-#define SC820CS_REG_PLL_GATE_ISP	CCI_REG8(0x36e9)
-#define SC820CS_REG_PLL_GATE_SENSOR	CCI_REG8(0x36f9)
-
 /* 19.2 MHz MCLK4, per the erhai vendor DT clock-rates property */
 #define SC820CS_XCLK_FREQ		19200000
 
-/* 2 data lanes, RAW10: link freq 720 MHz => 1.44 Gbps/lane,
- * pixel rate = 2 lanes * 2 (DDR) * 720 MHz / 10 bit = 288 MHz. */
-#define SC820CS_LINK_FREQ		720000000ULL
-#define SC820CS_PIXEL_RATE		288000000ULL
+/* 4 data lanes, RAW10, link frequency 366 MHz => 732 Mbps/lane (DDR).
+ * The vendor 3888 x 2500 mode runs at 24 fps, so the pixel rate is
+ * 3888 * 2500 * 24 = 233.28 MHz.  Values hardware-verified on caihong;
+ * erhai uses the same module generation.  0x301f = 0x0e in the vendor
+ * table is the 4-lane lane-mode value, replacing the earlier 2-lane
+ * 720 MHz assumption.  待硬件验证 on erhai. */
+#define SC820CS_NUM_DATA_LANES		4
+#define SC820CS_LINK_FREQ		366000000ULL
+#define SC820CS_PIXEL_RATE		233280000ULL
 
 #define SC820CS_NATIVE_WIDTH		3264U
 #define SC820CS_NATIVE_HEIGHT		2448U
@@ -145,89 +163,41 @@ struct sc820cs_mode {
 /*
  * Mode register lists.
  *
- * TODO(vendor-regs): the vendor PLL / analog tuning blocks are not
- * available in GPL kernel source for this generation (see file header).
- * The lists below carry the structural registers (window size, HTS/VTS,
- * MIPI lane count, PLL clock gates) with computed values; the PLL divider
- * registers themselves are placeholders following the SC8238 programming
- * model.  Streaming before transplanting the vendor register block must
- * be expected to produce no or invalid frames.  待硬件验证.
+ * The 3264x2448 list is the caihong-verified vendor sequence
+ * (sc820cs-caihong-regs.h): soft reset, PLL gates, 4-lane MIPI mode and
+ * the analog tuning blocks.  It starts with a software reset and is
+ * written with a settle delay after the first entry - see
+ * sc820cs_enable_streams().
+ *
+ * Binned modes (1080p etc.) exist in the erhai odm blob (5 mode blocks
+ * at 0x1000 stride) but are not decoded yet; only the hardware-verified
+ * full-resolution mode is offered until then.
  */
-static const struct cci_reg_sequence sc820cs_mode_3264x2448_30fps[] = {
-	/* PLL clock gates off during (re)configuration */
-	{ SC820CS_REG_PLL_GATE_ISP, 0x80 },
-	{ SC820CS_REG_PLL_GATE_SENSOR, 0x80 },
-
-	/* TODO(vendor-regs): PLL divider block - placeholder values,
-	 * target 1.44 Gbps/lane from a 19.2 MHz MCLK. 待硬件验证. */
-	{ CCI_REG8(0x3018), 0x32 },	/* MIPI 2-lane enable */
-	{ CCI_REG8(0x3019), 0x00 },
-	{ CCI_REG8(0x301f), 0x02 },
-	{ CCI_REG8(0x3031), 0x0a },
-	{ CCI_REG8(0x3037), 0x20 },
-	{ CCI_REG8(0x3038), 0x44 },
-
-	/* Window / timing */
-	{ SC820CS_REG_OUT_WIDTH_H, 0x0c },	/* width 3264 */
-	{ SC820CS_REG_OUT_WIDTH_L, 0xc0 },
-	{ SC820CS_REG_OUT_HEIGHT_H, 0x09 },	/* height 2448 */
-	{ SC820CS_REG_OUT_HEIGHT_L, 0x90 },
-	{ SC820CS_REG_HTS_H, 0x0e },		/* HTS 3600 */
-	{ SC820CS_REG_HTS_L, 0x10 },
-	{ SC820CS_REG_VTS_H, 0x0a },		/* VTS 2670 */
-	{ SC820CS_REG_VTS_L, 0x6e },
-
-	/* PLL clock gates on */
-	{ SC820CS_REG_PLL_GATE_ISP, 0x53 },	/* TODO(vendor-regs) 待硬件验证 */
-	{ SC820CS_REG_PLL_GATE_SENSOR, 0x57 },
-};
-
-static const struct cci_reg_sequence sc820cs_mode_1920x1080_30fps[] = {
-	{ SC820CS_REG_PLL_GATE_ISP, 0x80 },
-	{ SC820CS_REG_PLL_GATE_SENSOR, 0x80 },
-
-	/* TODO(vendor-regs): same PLL placeholder as above. 待硬件验证. */
-	{ CCI_REG8(0x3018), 0x32 },
-	{ CCI_REG8(0x3019), 0x00 },
-	{ CCI_REG8(0x301f), 0x02 },
-	{ CCI_REG8(0x3031), 0x0a },
-	{ CCI_REG8(0x3037), 0x20 },
-	{ CCI_REG8(0x3038), 0x44 },
-
-	/* Window / timing (2x2 binned 1080p; binning registers TBD from
-	 * vendor table). 待硬件验证. */
-	{ SC820CS_REG_OUT_WIDTH_H, 0x07 },	/* width 1920 */
-	{ SC820CS_REG_OUT_WIDTH_L, 0x80 },
-	{ SC820CS_REG_OUT_HEIGHT_H, 0x04 },	/* height 1080 */
-	{ SC820CS_REG_OUT_HEIGHT_L, 0x38 },
-	{ SC820CS_REG_HTS_H, 0x0e },		/* HTS 3600 */
-	{ SC820CS_REG_HTS_L, 0x10 },
-	{ SC820CS_REG_VTS_H, 0x0a },		/* VTS 2670 */
-	{ SC820CS_REG_VTS_L, 0x6e },
-
-	{ SC820CS_REG_PLL_GATE_ISP, 0x53 },	/* TODO(vendor-regs) 待硬件验证 */
-	{ SC820CS_REG_PLL_GATE_SENSOR, 0x57 },
-};
-
 static const struct sc820cs_mode supported_modes[] = {
 	{
-		/* Full resolution 8MP @ 30fps, RAW10 */
+		/* Full resolution 8MP @ 24 fps, RAW10 */
 		.width		= 3264,
 		.height		= 2448,
-		.hts_def	= 3600,
-		.vts_def	= 2670,
-		.reg_list	= sc820cs_mode_3264x2448_30fps,
-		.reg_list_len	= ARRAY_SIZE(sc820cs_mode_3264x2448_30fps),
+		.hts_def	= SC820CS_HTS_DEF,
+		.vts_def	= SC820CS_VTS_DEF,
+		.reg_list	= sc820cs_caihong_3264x2448_regs,
+		.reg_list_len	= ARRAY_SIZE(sc820cs_caihong_3264x2448_regs),
 	},
-	{
-		/* 1080p (binned) @ 30fps, RAW10 */
-		.width		= 1920,
-		.height		= 1080,
-		.hts_def	= 3600,
-		.vts_def	= 2670,
-		.reg_list	= sc820cs_mode_1920x1080_30fps,
-		.reg_list_len	= ARRAY_SIZE(sc820cs_mode_1920x1080_30fps),
-	},
+};
+
+/* Analogue gain range steps: coarse code for 0x3e08 with the gain value
+ * (1/1024 units) at the start of each range.  From the caihong driver. */
+struct sc820cs_gain_step {
+	u32 gain;
+	u8 coarse;
+};
+
+static const struct sc820cs_gain_step sc820cs_gain_steps[] = {
+	{ 1024, 0x00 },
+	{ 2048, 0x08 },
+	{ 4096, 0x09 },
+	{ 8192, 0x0b },
+	{ 16384, 0x0f },
 };
 
 static const s64 sc820cs_link_freq_menu[] = {
@@ -298,42 +268,39 @@ static u32 sc820cs_get_format_code(struct sc820cs *sc820cs, u32 code)
 
 static int sc820cs_set_exposure(struct sc820cs *sc820cs, u32 exposure)
 {
+	u32 encoded = exposure * 2;
 	int ret = 0;
 
+	cci_write(sc820cs->regmap, SC820CS_REG_EXPOSURE_20,
+		  (encoded >> 20) & 0x0f, &ret);
 	cci_write(sc820cs->regmap, SC820CS_REG_EXPOSURE_H,
-		  (exposure >> 12) & 0xf, &ret);
+		  (encoded >> 12) & 0xff, &ret);
 	cci_write(sc820cs->regmap, SC820CS_REG_EXPOSURE_M,
-		  (exposure >> 4) & 0xff, &ret);
+		  (encoded >> 4) & 0xff, &ret);
 	cci_write(sc820cs->regmap, SC820CS_REG_EXPOSURE_L,
-		  (exposure & 0xf) << 4, &ret);
+		  (exposure & 0x07) << 5, &ret);
 
 	return ret;
 }
 
 static int sc820cs_set_analogue_gain(struct sc820cs *sc820cs, u32 gain)
 {
-	u32 coarse, fine;
+	const struct sc820cs_gain_step *step = &sc820cs_gain_steps[0];
+	unsigned int i, fine;
 	int ret = 0;
 
-	/* Coarse/fine split identical to SC8238: the 7-bit fine register
-	 * carries gain/128 within the range, the coarse register selects
-	 * the binary range. 待硬件验证. */
-	if (gain < 0x100) {		/* 1x .. 2x */
-		fine = gain & 0x7f;
-		coarse = SC820CS_AGAIN_COARSE_1X;
-	} else if (gain < 0x200) {	/* 2x .. 4x */
-		fine = (gain >> 1) & 0x7f;
-		coarse = SC820CS_AGAIN_COARSE_2X;
-	} else if (gain < 0x400) {	/* 4x .. 8x */
-		fine = (gain >> 2) & 0x7f;
-		coarse = SC820CS_AGAIN_COARSE_4X;
-	} else {			/* 8x .. 7.94x ceiling */
-		fine = (gain >> 3) & 0x7f;
-		coarse = SC820CS_AGAIN_COARSE_8X;
+	for (i = 1; i < ARRAY_SIZE(sc820cs_gain_steps); i++) {
+		if (gain < sc820cs_gain_steps[i].gain)
+			break;
+		step = &sc820cs_gain_steps[i];
 	}
 
-	cci_write(sc820cs->regmap, SC820CS_REG_AGAIN_COARSE, coarse, &ret);
-	cci_write(sc820cs->regmap, SC820CS_REG_AGAIN_FINE, fine, &ret);
+	fine = (gain * 128 + step->gain / 2) / step->gain;
+
+	cci_write(sc820cs->regmap, SC820CS_REG_AGAIN_COARSE,
+		  step->coarse, &ret);
+	cci_write(sc820cs->regmap, SC820CS_REG_AGAIN_FINE,
+		  clamp_val(fine, 0, 0xff), &ret);
 
 	return ret;
 }
@@ -356,7 +323,7 @@ static int sc820cs_set_ctrl(struct v4l2_ctrl *ctrl)
 		int exposure_max;
 
 		exposure_max = format->height + ctrl->val -
-			       SC820CS_EXPOSURE_OFFSET;
+				       SC820CS_EXPOSURE_MARGIN;
 		ret = __v4l2_ctrl_modify_range(sc820cs->exposure,
 					       sc820cs->exposure->minimum,
 					       exposure_max,
@@ -378,17 +345,11 @@ static int sc820cs_set_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	case V4L2_CID_VBLANK:
 		val = format->height + ctrl->val;
-		cci_write(sc820cs->regmap, SC820CS_REG_VTS_H,
-			  (val >> 8) & 0x7f, &ret);
-		cci_write(sc820cs->regmap, SC820CS_REG_VTS_L,
-			  val & 0xff, &ret);
+		cci_write(sc820cs->regmap, SC820CS_REG_VTS, val, &ret);
 		break;
 	case V4L2_CID_HBLANK:
 		val = format->width + ctrl->val;
-		cci_write(sc820cs->regmap, SC820CS_REG_HTS_H,
-			  (val >> 8) & 0xff, &ret);
-		cci_write(sc820cs->regmap, SC820CS_REG_HTS_L,
-			  val & 0xff, &ret);
+		cci_write(sc820cs->regmap, SC820CS_REG_HTS, val, &ret);
 		break;
 	case V4L2_CID_TEST_PATTERN:
 		val = ctrl->val ? SC820CS_TEST_PATTERN_BIT : 0;
@@ -449,19 +410,22 @@ static int sc820cs_init_controls(struct sc820cs *sc820cs)
 	if (sc820cs->link_freq)
 		sc820cs->link_freq->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 
+	/* VBLANK/HBLANK minimums are pinned to the hardware-verified vendor
+	 * timing (HTS 3888 / VTS 2500); frame timing can only be stretched,
+	 * never shrunk below the known-good mode. */
 	sc820cs->vblank = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
 					    V4L2_CID_VBLANK,
-					    SC820CS_VBLANK_MIN,
+					    mode->vts_def - mode->height,
 					    SC820CS_VTS_MAX - mode->height, 1,
 					    mode->vts_def - mode->height);
 
 	sc820cs->hblank = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
 					    V4L2_CID_HBLANK,
-					    SC820CS_HTS_MIN - mode->width,
-					    SC820CS_VTS_MAX - mode->width, 1,
+					    mode->hts_def - mode->width,
+					    SC820CS_HTS_MAX - mode->width, 1,
 					    mode->hts_def - mode->width);
 
-	exposure_max = mode->vts_def - SC820CS_EXPOSURE_OFFSET;
+	exposure_max = mode->vts_def - SC820CS_EXPOSURE_MARGIN;
 	exposure_def = min_t(int, exposure_max, SC820CS_EXPOSURE_DEFAULT);
 	sc820cs->exposure = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
 					      V4L2_CID_EXPOSURE,
@@ -531,9 +495,22 @@ static int sc820cs_enable_streams(struct v4l2_subdev *sd,
 	if (ret < 0)
 		return ret;
 
-	/* Mode register list (window/PLL/MIPI). See TODO(vendor-regs). */
-	ret = cci_multi_reg_write(sc820cs->regmap, sc820cs->mode->reg_list,
-				  sc820cs->mode->reg_list_len, NULL);
+	/* Mode register list (soft reset, PLL, 4-lane MIPI, analog tuning).
+	 * The vendor sequence starts with a software reset (0x0103 = 1); let
+	 * the sensor settle before writing the rest of the list (5 ms, per
+	 * the caihong driver). */
+	ret = cci_write(sc820cs->regmap, sc820cs->mode->reg_list[0].reg,
+			sc820cs->mode->reg_list[0].val, NULL);
+	if (ret) {
+		dev_err(&client->dev, "failed to soft reset sensor\n");
+		goto err_rpm_put;
+	}
+
+	usleep_range(5000, 6000);
+
+	ret = cci_multi_reg_write(sc820cs->regmap,
+				  &sc820cs->mode->reg_list[1],
+				  sc820cs->mode->reg_list_len - 1, NULL);
 	if (ret) {
 		dev_err(&client->dev, "failed to write mode registers\n");
 		goto err_rpm_put;
@@ -646,19 +623,20 @@ static int sc820cs_set_pad_format(struct v4l2_subdev *sd,
 	sc820cs->mode = mode;
 
 	if (fmt->which == V4L2_SUBDEV_FORMAT_ACTIVE) {
-		exposure_max = mode->vts_def - SC820CS_EXPOSURE_OFFSET;
+		exposure_max = mode->vts_def - SC820CS_EXPOSURE_MARGIN;
 		exposure_def = min_t(int, exposure_max,
 				     SC820CS_EXPOSURE_DEFAULT);
 
-		__v4l2_ctrl_modify_range(sc820cs->vblank, SC820CS_VBLANK_MIN,
+		__v4l2_ctrl_modify_range(sc820cs->vblank,
+					 mode->vts_def - mode->height,
 					 SC820CS_VTS_MAX - mode->height, 1,
 					 mode->vts_def - mode->height);
 		__v4l2_ctrl_s_ctrl(sc820cs->vblank,
 				   mode->vts_def - mode->height);
 
 		__v4l2_ctrl_modify_range(sc820cs->hblank,
-					 SC820CS_HTS_MIN - mode->width,
-					 SC820CS_VTS_MAX - mode->width, 1,
+					 mode->hts_def - mode->width,
+					 SC820CS_HTS_MAX - mode->width, 1,
 					 mode->hts_def - mode->width);
 		__v4l2_ctrl_s_ctrl(sc820cs->hblank,
 				   mode->hts_def - mode->width);
@@ -692,8 +670,9 @@ static int sc820cs_get_selection(struct v4l2_subdev *sd,
 
 	case V4L2_SEL_TGT_CROP_DEFAULT:
 	case V4L2_SEL_TGT_CROP_BOUNDS:
-		/* Full active array; the exact array offset is unknown
-		 * without the vendor register table. 待硬件验证. */
+		/* Full active array; the vendor register table does not
+		 * carry crop offsets, so the exact array offset is unknown.
+		 * 待硬件验证. */
 		sel->r.top = 0;
 		sel->r.left = 0;
 		sel->r.width = SC820CS_NATIVE_WIDTH;
@@ -854,11 +833,13 @@ static int sc820cs_check_hwcfg(struct device *dev, struct sc820cs *sc820cs)
 		goto error_out;
 	}
 
-	/* Only the 2-lane configuration is validated against real mode
-	 * timings; the erhai front module is 2-lane per vendor DT usage. */
-	if (ep_cfg.bus.mipi_csi2.num_data_lanes != 2) {
+	/* 4-lane per the hardware-verified caihong vendor table
+	 * (0x301f = 0x0e); the earlier 2-lane assumption is dropped.
+	 * 待硬件验证 on erhai. */
+	if (ep_cfg.bus.mipi_csi2.num_data_lanes != SC820CS_NUM_DATA_LANES) {
 		dev_err_probe(dev, -EINVAL,
-			      "only 2 data lanes are supported\n");
+			      "only %u data lanes are supported\n",
+			      SC820CS_NUM_DATA_LANES);
 		goto error_out;
 	}
 
@@ -1036,5 +1017,6 @@ static struct i2c_driver sc820cs_i2c_driver = {
 module_i2c_driver(sc820cs_i2c_driver);
 
 MODULE_AUTHOR("erhai mainline project");
+MODULE_AUTHOR("Osilvfe <osilvfe@gmail.com> (caihong register table)");
 MODULE_DESCRIPTION("SmartSens SC820CS sensor driver");
 MODULE_LICENSE("GPL v2");
