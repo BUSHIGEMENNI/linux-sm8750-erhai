@@ -386,14 +386,18 @@ static const struct cci_reg_sequence sc1320cs_mode_4160x3120[] = {
 	{ CCI_REG8(0x3215), 0x11 },
 	{ CCI_REG8(0x3220), 0x00 },
 	/*
-	 * 0x3221[6:5]=flip (V), [2:1]=mirror (H). Keep the vertical flip so the
-	 * scene is upright. For the horizontal mirror use Android's 0x66
-	 * (mirror ON): once the sensor is declared rear (location=back) GNOME
-	 * Snapshot / aperture applies its OWN horizontal mirror to BOTH the
-	 * preview and the saved picture, so the sensor mirror has to be ON to
-	 * cancel it and land un-mirrored on screen and on disk. (0x60 / mirror
-	 * OFF leaves both mirrored.) Bayer phase is preserved across the mirror
-	 * toggle (SC-series mirrors in 2-pixel groups), so SBGGR10 stays valid.
+	 * 0x3221: bit5 = vertical flip, bit2 = horizontal mirror (measured by
+	 * sweeping the register on the sibling SC820CS: 0x60 and 0x06 each
+	 * carry exactly one real bit, bits 6 and 1 are duplicates of them).
+	 * Keep the vertical flip so the scene is upright. For the horizontal
+	 * mirror use Android's 0x66 (mirror ON): once the sensor is declared
+	 * rear (location=back) GNOME Snapshot / aperture applies its OWN
+	 * horizontal mirror to BOTH the preview and the saved picture, so the
+	 * sensor mirror has to be ON to cancel it and land un-mirrored on
+	 * screen and on disk. (0x60 / mirror OFF leaves both mirrored.) A
+	 * readout rotation moves the CFA start, so both flips together shift
+	 * it by one pixel in each axis: a BGGR part then reads out RGGB, which
+	 * is the phase this driver declares.
 	 */
 	{ CCI_REG8(0x3221), 0x66 },
 	{ CCI_REG8(0x5000), 0x1e },
