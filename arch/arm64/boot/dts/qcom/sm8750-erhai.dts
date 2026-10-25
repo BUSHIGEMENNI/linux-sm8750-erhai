@@ -2291,14 +2291,12 @@
 	 * master 1).  Node values are TheMojoMan's v491..v495 recipe,
 	 * verified on his Pad 3 (same panel of hardware): CPAS-TOP window,
 	 * the 10-clock set, the AHB/cam_hf/cam_sf interconnect votes and the
-	 * ICP-0 CAMNOC runtime rates.  PRE-WIRED ONLY:
+	 * ICP-0 CAMNOC runtime rates.
 	 *
-	 * status stays "disabled" because the 7.2 in-tree i2c-qcom-cci has
-	 * no sm8750 support and none of the interconnect voting the recipe
-	 * depends on — binding the stock driver to this node reproduced a
-	 * boot black screen on the Pad 3 (probe touches clocks/GDSC/CSRs
-	 * before any in-probe gate).  Flip to okay together with the driver
-	 * port.
+	 * The erhai port of i2c-qcom-cci is now in the tree: it takes the
+	 * CPAS-TOP window and the AHB/cam_hf/cam_sf votes this node declares,
+	 * and gates the CSR write in probe behind erhai_cci_csr (default 0,
+	 * boot-safe).  See the status comment inside the node.
 	 */
 	cci0: cci@ac7b000 {
 		compatible = "qcom,sm8750-cci", "qcom,msm8996-cci";
@@ -2447,13 +2445,14 @@
 	 *   csiphy0-5     ada9000..adb3000 (0x2000)          irq 477/478/479/448/122/89
 	 *   csitpg0-2     ad8b000/ad8c000/ad8d000 (0x400)
 	 *   vfe0/1/2      ac86000/ac96000/aca6000 (0x10000)  irq 433/436/457
-	 *   vfe_lite0/1   ad6d000/ad72000 (0x2800)           irq 606/377
+	 *   vfe_lite0/1   ad6e000/ad73000 (0x3000)           irq 606/377
 	 *
-	 * vfe_lite0/1 deliberately reuse the csid_lite base with a 0x2800
-	 * superset window (downstream "ife-lite" layout): the csid-980 ops in
-	 * the upstream driver handle the shared window, so the overlap between
-	 * csid_lite0/1 (0xa00) and vfe_lite0/1 (0x2800) is intentional — do not
-	 * "fix" it.
+	 * The vfe_lite windows come from the official binding example, not the
+	 * vendor dtbo: the vendor layout (ad6d000/ad72000, 0x2800) overlaps the
+	 * csid_lite windows (0xa00), and the mainline driver
+	 * devm_request_mem_region()s each subdev window independently, so an
+	 * overlap fails with -EBUSY.  Independent windows are the working
+	 * arrangement; do not "restore" the downstream addresses.
 	 *
 	 * The in-tree driver (csiphy_res_8750/csid_res_8750/icc_res_sm8750,
 	 * official v5 patch set) only instantiates CSIPHY + CSID entities and
@@ -2704,8 +2703,8 @@
  *
  * Bring-up TODOs:
  *   - CSI hookup DONE (below): sc820cs_out -> camss_csiphy5, values from
- *     TheMojoMan's verified Pad 3 tree.  The camss/cci0 side stays
- *     status="disabled" until the sm8750 camss driver port lands.
+ *     TheMojoMan's verified Pad 3 tree.  The camss and cci0 nodes are
+ *     enabled; erhai-boot-heal arms the CCI CSR after boot.
  */
 &gpi_dma2 {
 	status = "okay";
