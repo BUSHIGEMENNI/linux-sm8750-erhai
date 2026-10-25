@@ -163,6 +163,8 @@ struct cps8601 {
 	struct work_struct	attach_work;
 	struct wakeup_source	*ws;
 	struct completion	hboost_ack;
+	struct pmic_glink_client *pgclient;
+	bool			service_up;
 
 	int			irq;
 	bool			irq_armed;
@@ -181,19 +183,29 @@ struct cps8601 {
 	u16			debug_reg;
 };
 
-/* the one 2-0041 instance on the board, set from probe for the atomic
- * glink rx hook (see cps8601_glink_rx) */
-static struct cps8601 *cps8601_singleton;
-
-/* erhai_otg routes every inbound pmic_glink message owned by 0x8011 here;
- * any such message after a rail request is the ADSP ACK we gate on (the
- * vendor client matched its own owner the same way). Atomic context. */
-static void cps8601_glink_rx(const void *data, size_t len)
+/*
+ * Dedicated pmic_glink client for the wireless-pen hboost owner.
+ * pmic_glink routes RX strictly by hdr->owner to the registered client,
+ * and the ADSP drops 0x8011 requests that arrive on the battery_charger
+ * client's channel — the piggyback send (erhai_otg_glink_send_raw with a
+ * forged owner) provably never got an answer (60 x 512 ms of silence in
+ * the ge3816d8d8 boot, 2026-10-25).  Any inbound message on our own
+ * client after a rail request is the ACK we gate on.
+ */
+static void cps8601_glink_rx(const void *data, size_t len, void *priv)
 {
-	struct cps8601 *chip = READ_ONCE(cps8601_singleton);
+	struct cps8601 *chip = priv;
 
-	if (chip)
-		complete(&chip->hboost_ack);
+	complete(&chip->hboost_ack);
+}
+
+static void cps8601_pdr_notify(void *priv, int state)
+{
+	struct cps8601 *chip = priv;
+
+	/* SERVREG_SERVICE_STATE_UP == 2; charging works long before this
+	 * callback fires, so never gate the send loop on it — just note it */
+	WRITE_ONCE(chip->service_up, state == 2);
 }
 
 static int cps8601_hboost_req(struct cps8601 *chip, u8 code)
@@ -218,17 +230,22 @@ static int cps8601_hboost_req(struct cps8601 *chip, u8 code)
 	 */
 	for (i = 0; i < 60; i++) {
 		reinit_completion(&chip->hboost_ack);
-		ret = erhai_otg_glink_send_raw(&msg, sizeof(msg));
-		if (ret)
+		if (chip->pgclient)
+			ret = pmic_glink_send(chip->pgclient,
+					      (void *)&msg, sizeof(msg));
+		else
+			ret = erhai_otg_glink_send_raw(&msg, sizeof(msg));
+		if (ret && ret != -ECONNRESET)
 			return ret;
 		if (wait_for_completion_timeout(&chip->hboost_ack,
 						msecs_to_jiffies(512))) {
-			dev_dbg(chip->dev, "hboost %u ACKed (round %d)\n",
-				code, i + 1);
+			dev_info(chip->dev, "hboost %u ACKed (round %d, own client %d)\n",
+				 code, i + 1, !!chip->pgclient);
 			return 0;
 		}
 	}
-	dev_warn(chip->dev, "hboost %u: no ADSP ACK in %d rounds\n", code, i);
+	dev_warn(chip->dev, "hboost %u: no ADSP ACK in %d rounds (own client %d)\n",
+		 code, i, !!chip->pgclient);
 	return -ETIMEDOUT;
 }
 
@@ -1027,8 +1044,24 @@ static int cps8601_probe(struct i2c_client *client)
 	INIT_DELAYED_WORK(&chip->ready_work, cps8601_ready_work);
 	INIT_WORK(&chip->attach_work, cps8601_attach_work);
 	init_completion(&chip->hboost_ack);
-	WRITE_ONCE(cps8601_singleton, chip);
-	erhai_otg_glink_set_rx_hook(cps8601_glink_rx);
+
+	/* Own 0x8011 client so the ADSP both accepts our requests and can
+	 * route the ACKs back (see the comment above cps8601_glink_rx).
+	 * Registration never blocks; sends just fail with -ECONNRESET
+	 * until the ADSP service is up, which the retry loop tolerates. */
+	/* devm_pmic_glink_client_alloc() is only valid for pmic_glink child
+	 * devices — from this i2c device it would mutex-lock garbage (see
+	 * erhai_otg_glink.c).  Register through the real child instead. */
+	chip->pgclient = erhai_otg_glink_client_register_sibling(
+					CPS8601_HBOOST_OWNER,
+					cps8601_glink_rx,
+					cps8601_pdr_notify, chip);
+	if (IS_ERR(chip->pgclient)) {
+		dev_warn(dev, "0x8011 sibling client: %ld, falling back to piggyback\n",
+			 PTR_ERR(chip->pgclient));
+		chip->pgclient = NULL;
+	}
+
 	schedule_work(&chip->init_work);
 
 	return 0;
@@ -1038,8 +1071,7 @@ static void cps8601_remove(struct i2c_client *client)
 {
 	struct cps8601 *chip = i2c_get_clientdata(client);
 
-	erhai_otg_glink_set_rx_hook(NULL);
-	WRITE_ONCE(cps8601_singleton, NULL);
+	erhai_otg_glink_client_neuter(chip->pgclient);
 	cancel_work_sync(&chip->init_work);
 	cancel_work_sync(&chip->attach_work);
 	cancel_delayed_work_sync(&chip->ready_work);
