@@ -2543,6 +2543,20 @@
 		iommus = <&apps_smmu 0x1c00 0x0>;
 		dma-coherent;
 
+		/*
+		 * Same NoC opening the erhai cci driver votes for: without
+		 * these the ad6d/ad72 IFE-lite MMIO window reads all-zero
+		 * (the CCI at ac7b lives on the cfg NoC that the cci driver
+		 * already opens; the IFE window is behind CAMNOC instead).
+		 */
+		interconnects = <&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
+				 &config_noc SLAVE_CAMERA_CFG QCOM_ICC_TAG_ACTIVE_ONLY>,
+				<&mmss_noc MASTER_CAMNOC_HF QCOM_ICC_TAG_ALWAYS
+				 &mmss_noc SLAVE_MNOC_HF_MEM_NOC QCOM_ICC_TAG_ALWAYS>,
+				<&mmss_noc MASTER_CAMNOC_SF QCOM_ICC_TAG_ALWAYS
+				 &mmss_noc SLAVE_MNOC_SF_MEM_NOC QCOM_ICC_TAG_ALWAYS>;
+		interconnect-names = "ahb", "cam_hf", "cam_sf";
+
 		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
 		power-domain-names = "top";
 
