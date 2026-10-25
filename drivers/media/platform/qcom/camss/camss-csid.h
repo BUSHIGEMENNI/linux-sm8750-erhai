@@ -223,9 +223,9 @@ extern const struct csid_hw_ops csid_ops_4_7;
 extern const struct csid_hw_ops csid_ops_340;
 extern const struct csid_hw_ops csid_ops_680;
 extern const struct csid_hw_ops csid_ops_980;
-extern const struct csid_hw_ops csid_ops_gen4;
 extern const struct csid_hw_ops csid_ops_gen2;
 extern const struct csid_hw_ops csid_ops_gen3;
+extern const struct csid_hw_ops csid_ops_gen4;
 
 /*
  * csid_is_lite - Check if CSID is CSID lite.

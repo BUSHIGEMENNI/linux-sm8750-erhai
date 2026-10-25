@@ -9,10 +9,9 @@ qcom-camss-objs += \
 		camss-csid-340.o \
 		camss-csid-680.o \
 		camss-csid-980.o \
-		camss-csid-gen4.o \
-		camss-vfe-gen4.o \
 		camss-csid-gen2.o \
 		camss-csid-gen3.o \
+		camss-csid-gen4.o \
 		camss-csiphy.o \
 		camss-csiphy-2ph-1-0.o \
 		camss-csiphy-3ph-1-0.o \
@@ -30,6 +29,7 @@ qcom-camss-objs += \
 		camss-vfe-680.o \
 		camss-vfe-gen1.o \
 		camss-vfe-gen3.o \
+		camss-vfe-gen4.o \
 		camss-vfe-vbif.o \
 		camss-video.o
 
