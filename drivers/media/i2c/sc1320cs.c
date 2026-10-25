@@ -114,7 +114,7 @@ static int sc1320cs_power_on(struct device *dev)
 		 * cam_vdig (vreg_l1i 1.0-1.2) came up at 1.0V — DVDD undervolt.
 		 * Request the exact voltages before enable. */
 		static const int uV[SC1320CS_NUM_SUPPLIES] = {
-			2900000, 1800000, 1200000, 2900000,
+			2800000, 1800000, 1200000, 2800000,
 		};
 		int i;
 
