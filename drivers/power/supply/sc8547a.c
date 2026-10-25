@@ -2126,9 +2126,15 @@ static void sc8547_auto_identify_tick(struct sc8547a_device *sc)
 	vbat = sc8547_get_vbat(sc);
 	vref = (cell_mv > SC8547_CELL_MIN_VALID_MV) ? cell_mv : vbat;
 	/* A failed CP ADC read leaves vref negative; indexing the curve with
-	that errno would pick the highest-current row (index 0) and engage
-	the pump flat out.  Refuse the tick instead. */
+	 * that errno would pick the highest-current row (index 0) and engage
+	 * the pump flat out.  Skip the tick instead: one bad sample is not a
+	 * reason to abandon fast charging for the rest of the plug, and a
+	 * persistently unreadable ADC still ends in a decline when the
+	 * identify window runs out — which restores the normal charge route
+	 * rather than leaving the crossbar armed. */
 	if (vref <= 0) {
+		if (time_before(jiffies, sc->auto_identify_deadline))
+			return;
 		sc8547_auto_decline(sc, "CP voltage unreadable");
 		return;
 	}
