@@ -814,6 +814,31 @@ config VIDEO_SC820CS
 	  To compile this driver as a module, choose M here: the
 	  module will be called sc820cs.
 
+config VIDEO_SC1320CS
+	tristate "SmartSens SC1320CS sensor support"
+	depends on I2C && VIDEO_DEV
+	select V4L2_CCI_I2C
+	select V4L2_FWNODE
+	help
+	  This is a Video4Linux2 sensor driver for the SmartSens
+	  SC1320CS 13MP camera (OnePlus Pad 3 rear main).
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called sc1320cs.
+
+config VIDEO_CN3927
+	tristate "Chipnext CN3927 lens voice coil support"
+	depends on I2C && VIDEO_DEV
+	help
+	  This is a driver for the CN3927 camera lens voice coil.
+	  CN3927 is a 10 bit DAC controlled via I2C with an unlock
+	  register at 0xed and the DAC position split across
+	  registers 0x03/0x04.  Used for the OnePlus Pad 3 (erhai)
+	  rear-camera autofocus actuator (CN3927-compatible protocol).
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called cn3927.
+
 config VIDEO_T4KA3
 	tristate "Toshiba T4KA3 sensor support"
 	depends on ACPI || COMPILE_TEST
