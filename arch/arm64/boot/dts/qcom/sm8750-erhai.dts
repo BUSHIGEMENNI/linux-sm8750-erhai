@@ -2056,6 +2056,20 @@
 		};
 	};
 };
+	 * ICP-0 CAMNOC runtime rates.
+	 * The erhai port of i2c-qcom-cci is now in the tree: it takes the
+	 * CPAS-TOP window and the AHB/cam_hf/cam_sf votes this node declares,
+	 * and gates the CSR write in probe behind erhai_cci_csr (default 0,
+	 * boot-safe).  See the status comment inside the node.
+	 *   vfe_lite0/1   ad6e000/ad73000 (0x3000)           irq 606/377
+	 * The vfe_lite windows come from the official binding example, not the
+	 * vendor dtbo: the vendor layout (ad6d000/ad72000, 0x2800) overlaps the
+	 * csid_lite windows (0xa00), and the mainline driver
+	 * devm_request_mem_region()s each subdev window independently, so an
+	 * overlap fails with -EBUSY.  Independent windows are the working
+	 * arrangement; do not "restore" the downstream addresses.
+ *     TheMojoMan's verified Pad 3 tree.  The camss and cci0 nodes are
+ *     enabled; erhai-boot-heal arms the CCI CSR after boot.
 /* Crash record capture for the intermittent early-boot wedge: the kernel
  * has CONFIG_PSTORE_RAM=y but no region, so forced reboots leave nothing in
  * /sys/fs/pstore.  Park 1 MiB at the top of the last System RAM block
