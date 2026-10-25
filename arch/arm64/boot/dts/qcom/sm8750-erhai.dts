@@ -2182,6 +2182,29 @@
  * as leds-qcom-flash binds, and CCI0 registers an i2c adapter so the
  * rear sensor/EEPROM addresses can be probed with i2cdetect.
  */
+/*
+ * sid-8 PM8550VE that carries the rear camera reset gpio (no mainline
+ * dtsi instantiates it; upstream sm8750-pmics only covers sid 5 = _f).
+ */
+&spmi_bus {
+	pm8550ve_i: pmic@8 {
+		compatible = "qcom,pm8550ve", "qcom,spmi-pmic";
+		reg = <0x8 SPMI_USID>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		pm8550ve_i_gpios: gpio@8800 {
+			compatible = "qcom,pm8550ve-gpio", "qcom,spmi-gpio";
+			reg = <0x8800>;
+			gpio-controller;
+			gpio-ranges = <&pm8550ve_i_gpios 0 0 8>;
+			#gpio-cells = <2>;
+			interrupt-controller;
+			#interrupt-cells = <2>;
+		};
+	};
+};
+
 &pm8550 {
 	flash-led@ee00 {
 		compatible = "qcom,pm8550-flash-led", "qcom,spmi-flash-led";
@@ -2232,68 +2255,315 @@
 };
 
 &tlmm {
-	cci0_default: cci0-default-state {
-		sda-pins {
-			pins = "gpio113";
-			function = "cci_i2c_sda";
-			drive-strength = <2>;
-			bias-pull-up = <2200>;
-		};
-		scl-pins {
-			pins = "gpio114";
-			function = "cci_i2c_scl";
-			drive-strength = <2>;
-			bias-pull-up = <2200>;
-		};
+	cam_rear_mclk_default: cam-rear-mclk-default-state {
+		pins = "gpio90";
+		function = "cam_mclk";
+		drive-strength = <2>;
+		bias-disable;
 	};
 
-	cci0_sleep: cci0-sleep-state {
-		sda-pins {
-			pins = "gpio113";
-			function = "cci_i2c_sda";
-			drive-strength = <2>;
-			bias-pull-down;
-		};
-		scl-pins {
-			pins = "gpio114";
-			function = "cci_i2c_scl";
-			drive-strength = <2>;
-			bias-pull-down;
-		};
+	/*
+	 * CCI0 master 1 pins (rear camera + VCM).  Pull-up is mandatory:
+	 * bias-disable left SDA floating, and when cci_init() arms the full
+	 * IRQ error mask CCI flags a bus error on the floating line ->
+	 * HALT_REQ -> RESET -> RST_DONE storm = uninterruptible IRQ
+	 * livelock (TheMojoMan's Pad 3 finding).  The same state doubles as
+	 * sleep: it idles the bus high.
+	 */
+	cci0_i2c_sda1_default: cci0-i2c-sda1-default-state {
+		pins = "gpio115";
+		function = "cci_i2c_sda";
+		drive-strength = <2>;
+		bias-pull-up;
+	};
+
+	cci0_i2c_scl1_default: cci0-i2c-scl1-default-state {
+		pins = "gpio116";
+		function = "cci_i2c_scl";
+		drive-strength = <2>;
+		bias-pull-up;
 	};
 };
 
 &soc {
+	/*
+	 * CCI0 — rear camera I2C (SC1320CS @0x36 + CN3927 VCM @0x0c on
+	 * master 1).  Node values are TheMojoMan's v491..v495 recipe,
+	 * verified on his Pad 3 (same panel of hardware): CPAS-TOP window,
+	 * the 10-clock set, the AHB/cam_hf/cam_sf interconnect votes and the
+	 * ICP-0 CAMNOC runtime rates.  PRE-WIRED ONLY:
+	 *
+	 * status stays "disabled" because the 7.2 in-tree i2c-qcom-cci has
+	 * no sm8750 support and none of the interconnect voting the recipe
+	 * depends on — binding the stock driver to this node reproduced a
+	 * boot black screen on the Pad 3 (probe touches clocks/GDSC/CSRs
+	 * before any in-probe gate).  Flip to okay together with the driver
+	 * port.
+	 */
 	cci0: cci@ac7b000 {
 		compatible = "qcom,sm8750-cci", "qcom,msm8996-cci";
-		reg = <0 0x0ac7b000 0 0x1000>;
-		interrupts = <GIC_SPI 426 IRQ_TYPE_EDGE_RISING 0>;
+		/* reg[0] = CCI CSR; reg[1] = CPAS-TOP (qchannel wakeup).
+		 * NB cam_cpas_top MMIO is at ac04000, not ac13000. */
+		reg = <0 0x0ac7b000 0 0x1000>,
+		      <0 0x0ac04000 0 0x1000>;
+		reg-names = "cci", "cpas_top";
+		interrupts = <GIC_SPI 426 IRQ_TYPE_EDGE_RISING>;
 		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
-		clocks = <&camcc CAM_CC_CAM_TOP_AHB_CLK>,
-			 <&camcc CAM_CC_CCI_0_CLK>;
-		clock-names = "ahb", "cci";
-		assigned-clocks = <&camcc CAM_CC_CCI_0_CLK>;
-		assigned-clock-rates = <37500000>;
-		pinctrl-0 = <&cci0_default>;
-		pinctrl-1 = <&cci0_sleep>;
+
+		/* ahb opens the CPU->camera-cfg NoC path to the CSR;
+		 * cam_hf/cam_sf fire the RPMh CAMNOC BCM out of retention. */
+		interconnects = <&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
+				 &config_noc SLAVE_CAMERA_CFG QCOM_ICC_TAG_ACTIVE_ONLY>,
+				<&mmss_noc MASTER_CAMNOC_HF QCOM_ICC_TAG_ALWAYS
+				 &mmss_noc SLAVE_MNOC_HF_MEM_NOC QCOM_ICC_TAG_ALWAYS>,
+				<&mmss_noc MASTER_CAMNOC_SF QCOM_ICC_TAG_ALWAYS
+				 &mmss_noc SLAVE_MNOC_SF_MEM_NOC QCOM_ICC_TAG_ALWAYS>;
+		interconnect-names = "ahb", "cam_hf", "cam_sf";
+
+		clocks = <&camcc CAM_CC_CAMNOC_NRT_AXI_CLK>,
+			 <&camcc CAM_CC_CAM_TOP_AHB_CLK>,
+			 <&camcc CAM_CC_CORE_AHB_CLK>,
+			 <&camcc CAM_CC_CCI_0_CLK>,
+			 <&camcc CAM_CC_ICP_0_AHB_CLK>,
+			 <&camcc CAM_CC_ICP_0_CLK>,
+			 <&camcc CAM_CC_CAMNOC_RT_AXI_CLK>,
+			 <&gcc GCC_CAMERA_AHB_CLK>,
+			 <&gcc GCC_CAMERA_HF_AXI_CLK>,
+			 <&gcc GCC_CAMERA_SF_AXI_CLK>;
+		clock-names = "camnoc_axi", "cpas_ahb", "cpas_core_ahb", "cci",
+			      "icp_ahb", "icp", "camnoc_rt",
+			      "gcc_cam_ahb", "gcc_cam_hf_axi", "gcc_cam_sf_axi";
+		assigned-clocks = <&camcc CAM_CC_CCI_0_CLK_SRC>,
+				  <&camcc CAM_CC_ICP_0_CLK_SRC>,
+				  <&camcc CAM_CC_CAMNOC_RT_AXI_CLK_SRC>;
+		assigned-clock-rates = <37500000>,
+				       <300000000>,
+				       <400000000>;
+
 		pinctrl-names = "default", "sleep";
-		status = "okay";
+		pinctrl-0 = <&cci0_i2c_sda1_default &cci0_i2c_scl1_default>;
+		pinctrl-1 = <&cci0_i2c_sda1_default &cci0_i2c_scl1_default>;
 
 		#address-cells = <1>;
 		#size-cells = <0>;
 
+		status = "disabled";
+
+		/*
+		 * master[0] MUST exist even though the sensors sit on
+		 * master 1: cci_reset() waits on master[0].irq_complete,
+		 * which is only initialised for masters with an i2c-bus
+		 * child.  An empty bus@0 avoids the OOPS; nothing xfers
+		 * on it.
+		 */
 		cci0_i2c0: i2c-bus@0 {
 			reg = <0>;
-			clock-frequency = <400000>; /* 先 400k 稳, 扫通后再上 1M */
 			#address-cells = <1>;
 			#size-cells = <0>;
 		};
 
 		cci0_i2c1: i2c-bus@1 {
 			reg = <1>;
+			/* FAST (400 kHz) is the fastest this bus sustains;
+			 * FAST_PLUS never meets VIH.  Downstream default. */
 			clock-frequency = <400000>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+
+			sc1320cs: camera-sensor@36 {
+				compatible = "smartsens,sc1320cs";
+				reg = <0x36>;
+
+				clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK1_CLK>;
+				clock-names = "cam_clk";
+				assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK1_CLK>;
+				assigned-clock-rates = <19200000>;
+
+				pinctrl-names = "default";
+				pinctrl-0 = <&cam_rear_mclk_default>;
+
+				reset-gpios = <&pm8550ve_i_gpios 5 GPIO_ACTIVE_LOW>;
+
+				/* Rear-facing module. */
+				orientation = <1>;
+				rotation = <0>;
+
+				cam_vana-supply = <&vreg_l16b_2p8>;
+				cam_vio-supply  = <&vreg_l4b_1p8>;
+				cam_vdig-supply = <&vreg_l1i_1p2>;
+				cam_vaf-supply  = <&vreg_l9b_2p9>;
+
+				/* Rear AF voice-coil motor (CCI0-m1 @0x0c). */
+				lens-focus = <&vcm>;
+
+				/* MIPI CSI-2 D-PHY 4-lane out -> CAMSS CSIPHY4.
+				 * Android CAM_START_PHYDEV for PHY-4:
+				 * 1200 Mbps/lane -> DDR link clock 600 MHz. */
+				port {
+					sc1320cs_ep: endpoint {
+						remote-endpoint = <&camss_csiphy4>;
+						data-lanes = <0 1 2 3>;
+						link-frequencies = /bits/ 64 <600000000>;
+					};
+				};
+			};
+
+			/*
+			 * Rear AF VCM, CN3927 protocol (unlock 0xed, DAC
+			 * position regs 0x03/0x04), verified via i2ctransfer
+			 * on the Pad 3.  The VAF rail is shared with the
+			 * sensor; the regulator core refcounts it.
+			 */
+			vcm: lens@c {
+				compatible = "chipnext,cn3927";
+				reg = <0x0c>;
+
+				vio-supply = <&vreg_l4b_1p8>;
+				vaf-supply = <&vreg_l9b_2p9>;
+			};
+		};
+	};
+
+	/*
+	 * CAMSS receive pipeline — RDI-LITE-ONLY variant, pre-wired.
+	 * CSIPHY0-5 + 2 CSID-lite + 2 VFE-lite (the only sun blocks that map
+	 * to mainline gen3 ops).  All 10 reg windows and all 10 IRQs are
+	 * verified against the live Android DT by TheMojoMan:
+	 *   csiphy0-5    ada9000/adab000/adad000/adaf000/adb1000/adb3000 (0x2000)
+	 *   csid_lite0/1 ad6d000 / ad72000
+	 *   vfe_lite0/1  ad6e000 / ad73000  (= csid_lite + 0x1000, the sm8650
+	 *     mainline convention; downstream's single "ife-lite" window is a
+	 *     0x2800 superset starting at the csid_lite base, i.e. consistent)
+	 *   IRQs 477/478/479/448/122/89, 605/376, 606/377
+	 *
+	 * PRE-WIRED ONLY: the 7.2 in-tree camss driver tops out at
+	 * qcom,sm8650-camss — nothing matches "qcom,sm8750-camss" yet, so
+	 * this node has no consumer.  status stays "disabled" until the
+	 * sm8750 camss port (upstream or Pad 3 tree) lands; the endpoints
+	 * are wired now so the sensors' remote-endpoint links are complete
+	 * from day one.
+	 */
+	camss: isp@ad6d000 {
+		compatible = "qcom,sm8750-camss";
+
+		reg = <0 0x0ada9000 0 0x2000>,
+		      <0 0x0adab000 0 0x2000>,
+		      <0 0x0adad000 0 0x2000>,
+		      <0 0x0adaf000 0 0x2000>,
+		      <0 0x0adb1000 0 0x2000>,
+		      <0 0x0adb3000 0 0x2000>,
+		      <0 0x0ad6d000 0 0x1000>,
+		      <0 0x0ad72000 0 0x1000>,
+		      <0 0x0ad6e000 0 0x2000>,
+		      <0 0x0ad73000 0 0x2000>;
+		reg-names = "csiphy0",
+			    "csiphy1",
+			    "csiphy2",
+			    "csiphy3",
+			    "csiphy4",
+			    "csiphy5",
+			    "csid_lite0",
+			    "csid_lite1",
+			    "vfe_lite0",
+			    "vfe_lite1";
+
+		clocks = <&camcc CAM_CC_CSIPHY0_CLK>,
+			 <&camcc CAM_CC_CSI0PHYTIMER_CLK>,
+			 <&camcc CAM_CC_CSIPHY1_CLK>,
+			 <&camcc CAM_CC_CSI1PHYTIMER_CLK>,
+			 <&camcc CAM_CC_CSIPHY2_CLK>,
+			 <&camcc CAM_CC_CSI2PHYTIMER_CLK>,
+			 <&camcc CAM_CC_CSIPHY3_CLK>,
+			 <&camcc CAM_CC_CSI3PHYTIMER_CLK>,
+			 <&camcc CAM_CC_CSIPHY4_CLK>,
+			 <&camcc CAM_CC_CSI4PHYTIMER_CLK>,
+			 <&camcc CAM_CC_CSIPHY5_CLK>,
+			 <&camcc CAM_CC_CSI5PHYTIMER_CLK>,
+			 <&camcc CAM_CC_IFE_LITE_AHB_CLK>,
+			 <&camcc CAM_CC_IFE_LITE_CSID_CLK>,
+			 <&camcc CAM_CC_IFE_LITE_CPHY_RX_CLK>,
+			 <&gcc GCC_CAMERA_HF_AXI_CLK>,
+			 <&camcc CAM_CC_CAMNOC_RT_AXI_CLK>,
+			 <&camcc CAM_CC_IFE_LITE_CLK>,
+			 <&camcc CAM_CC_QDSS_DEBUG_XO_CLK>,
+			 <&camcc CAM_CC_CAMNOC_RT_IFE_LITE_CLK>;
+		clock-names = "csiphy0",
+			      "csiphy0_timer",
+			      "csiphy1",
+			      "csiphy1_timer",
+			      "csiphy2",
+			      "csiphy2_timer",
+			      "csiphy3",
+			      "csiphy3_timer",
+			      "csiphy4",
+			      "csiphy4_timer",
+			      "csiphy5",
+			      "csiphy5_timer",
+			      "vfe_lite_ahb",
+			      "vfe_lite_csid",
+			      "vfe_lite_cphy_rx",
+			      "gcc_axi_hf",
+			      "camnoc_axi",
+			      "vfe_lite",
+			      "qdss_debug_xo",
+			      "camnoc_rt_ife_lite";
+
+		interrupts = <GIC_SPI 477 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 478 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 479 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 448 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 122 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 89 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 605 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 376 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 606 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 377 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "csiphy0",
+				  "csiphy1",
+				  "csiphy2",
+				  "csiphy3",
+				  "csiphy4",
+				  "csiphy5",
+				  "csid_lite0",
+				  "csid_lite1",
+				  "vfe_lite0",
+				  "vfe_lite1";
+
+		/*
+		 * SMMU SID 0x1c00 from the live Android DT (cam_smmu_ife
+		 * context bank, mask 0x0 as Android has it).  Without it
+		 * VIDIOC_REQBUFS falls back to swiotlb and a 16 MB RAW
+		 * frame never fits.
+		 */
+		iommus = <&apps_smmu 0x1c00 0x0>;
+		dma-coherent;
+
+		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
+		power-domain-names = "top";
+
+		status = "disabled";
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@4 {
+				reg = <4>;
+
+				camss_csiphy4: endpoint {
+					remote-endpoint = <&sc1320cs_ep>;
+					data-lanes = <0 1 2 3>;
+				};
+			};
+
+			port@5 {
+				reg = <5>;
+
+				camss_csiphy5: endpoint {
+					remote-endpoint = <&sc820cs_out>;
+					data-lanes = <0 1 2 3>;
+				};
+			};
 		};
 	};
 };
@@ -2320,12 +2590,9 @@
  * physical levels is exactly what inverted the sequence twice.
  *
  * Bring-up TODOs:
- *   - I2C address: vendor notes say 0x20, caihong measured 0x10 on its
- *     (CCI) bus; confirm with i2cdetect on i2c-9 and fix reg plus the
- *     unit address if needed.
- *   - CSI hookup: sm8750 CAMSS has no mainline nodes in this tree yet,
- *     so sc820cs_out has no remote-endpoint.  Once csiphy5/csid nodes
- *     land, point it at the csiphy5 endpoint (4 D-PHY lanes).
+ *   - CSI hookup DONE (below): sc820cs_out -> camss_csiphy5, values from
+ *     TheMojoMan's verified Pad 3 tree.  The camss/cci0 side stays
+ *     status="disabled" until the sm8750 camss driver port lands.
  */
 &gpi_dma2 {
 	status = "okay";
@@ -2381,9 +2648,18 @@
 			port@0 {
 				reg = <0>;
 
+				/* MIPI CSI-2 D-PHY 4-lane out -> CAMSS CSIPHY5.
+				 * Link rate ground truth: Android CAM_START_PHYDEV
+				 * for PHY-5 on this tablet is 736 Mbps/lane, so the
+				 * DDR link clock is 368 MHz (same figure TheMojoMan's
+				 * verified Pad 3 tree ships; the earlier 366 MHz was
+				 * borrowed from caihong and never verified on erhai).
+				 * camss takes the rate from the sensor's
+				 * V4L2_CID_LINK_FREQ, keep the two in step. */
 				sc820cs_out: endpoint {
-					data-lanes = <1 2 3 4>;
-					link-frequencies = /bits/ 64 <366000000>;
+					remote-endpoint = <&camss_csiphy5>;
+					data-lanes = <0 1 2 3>;
+					link-frequencies = /bits/ 64 <368000000>;
 				};
 			};
 		};
