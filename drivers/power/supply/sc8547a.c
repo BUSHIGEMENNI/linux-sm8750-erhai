@@ -366,7 +366,8 @@ MODULE_PARM_DESC(slave_drop_ticks,
  * ~88 W SuperVOOC at low SoC. Safe because the dual charge-pump shares the bus
  * ~50/50 (each pump ~3.65 A, under its proven solo capability, validated to
  * 5.9 A bus with pack temp flat), and delivery is bounded by the CELL 4500 mV CV
- * ceiling, the CP-side 4650 mV over-voltage guard, the 8000 mA total-bus
+ * ceiling, the CP-side 4800 mV over-voltage guard
+ * (SC8547_CP_OVP_CEILING_MV), the 8000 mA total-bus
  * over-current abort, and the 45 C pack-temp backstop. Auto delivery only ever
  * descends the curve.
  *
@@ -2605,6 +2606,19 @@ static int sc8547_dump_show(struct seq_file *m, void *unused)
 	int addr;
 
 	for (addr = 0x00; addr <= 0x3C; addr++) {
+		/*
+		 * 0x0f is the interrupt flag register and 0x2e/0x2f are the
+		 * VOOC RX buffer: a plain read clears the flag and consumes a
+		 * pending frame, which desynchronises the ladder while a
+		 * session is running.  sc8547a_pps_regs() already refuses to
+		 * touch them for the same reason; a debug dump must not be a
+		 * way around that.
+		 */
+		if (addr == 0x0f || addr == 0x2e || addr == 0x2f) {
+			seq_printf(m, "reg[0x%02x] = (not read: read-clear/RX)\n",
+				   addr);
+			continue;
+		}
 		if (sc8547_read_byte(sc, addr, &val) == 0)
 			seq_printf(m, "reg[0x%02x] = 0x%02x\n", addr, val);
 	}
