@@ -858,6 +858,14 @@ int erhai_otg_glink_send_raw(const void *data, size_t len)
 }
 EXPORT_SYMBOL_GPL(erhai_otg_glink_send_raw);
 
+/* Sibling RX hook for the wireless-pen hboost owner (see header). */
+static erhai_otg_glink_rx_fn erhai_otg_rx_hook;
+void erhai_otg_glink_set_rx_hook(erhai_otg_glink_rx_fn fn)
+{
+	WRITE_ONCE(erhai_otg_rx_hook, fn);
+}
+EXPORT_SYMBOL_GPL(erhai_otg_glink_set_rx_hook);
+
 int erhai_otg_adsp_prop_set(u32 opcode, u32 property, u32 value)
 {
 	if (!erhai_otg_glink_dev)
@@ -1063,6 +1071,16 @@ static void erhai_otg_callback(const void *data, size_t len, void *priv)
 		return;
 
 	opcode = le32_to_cpu(hdr->opcode);
+
+	/* Route wireless-pen (0x8011) traffic to the sibling hook first:
+	 * these replies belong to the CPS8601 driver's rail requests. */
+	if (le32_to_cpu(hdr->owner) == ERHAI_OTG_WLS_PEN_OWNER) {
+		erhai_otg_glink_rx_fn hook = READ_ONCE(erhai_otg_rx_hook);
+
+		if (hook)
+			hook(data, len);
+		return;
+	}
 
 	/*
 	 * Response to our property SET/GET. For a SET the ret_code tells us

@@ -38,6 +38,17 @@ int erhai_otg_adsp_prop_get(u32 opcode, u32 property);
 int erhai_otg_adsp_prop_set(u32 opcode, u32 property, u32 value);
 int erhai_otg_glink_send_raw(const void *data, size_t len);
 bool erhai_otg_charge_inhibited(void);
+
+/*
+ * Sibling RX hook: inbound pmic_glink messages owned by the wireless-pen
+ * hboost owner (0x8011) are routed to the registered callback.  The
+ * CPS8601 pen-charger driver piggybacks on this client for its rail
+ * requests and needs the ADSP ACK that this client's own message loop
+ * would otherwise drop.  Runs in atomic glink-rx context.
+ */
+#define ERHAI_OTG_WLS_PEN_OWNER		0x8011
+typedef void (*erhai_otg_glink_rx_fn)(const void *data, size_t len);
+void erhai_otg_glink_set_rx_hook(erhai_otg_glink_rx_fn fn);
 #else
 static inline int erhai_otg_adsp_usb_prop(u32 property)
 {

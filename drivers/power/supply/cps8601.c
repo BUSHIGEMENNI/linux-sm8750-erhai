@@ -124,8 +124,9 @@ module_param(fw_force, bool, 0644);
 MODULE_PARM_DESC(fw_force,
 	"reflash the pen charger firmware even if the version matches (unbrick switch)");
 
-/* vendor get_project(): stock image ships wireless_pen/24976/ on erhai */
-static unsigned int fw_project_id = 24976;
+/* vendor get_project(): the stock kernel log shows wireless_pen/24926/
+ * (bugreport pen-bugreport-analysis.md; the 24976 note was wrong) */
+static unsigned int fw_project_id = 24926;
 module_param(fw_project_id, uint, 0444);
 MODULE_PARM_DESC(fw_project_id,
 	"project id used in the wireless_pen/<id>/cps8601_firmware.bin path");
@@ -159,7 +160,9 @@ struct cps8601 {
 
 	struct work_struct	init_work;
 	struct delayed_work	ready_work;
+	struct work_struct	attach_work;
 	struct wakeup_source	*ws;
+	struct completion	hboost_ack;
 
 	int			irq;
 	bool			irq_armed;
@@ -178,10 +181,25 @@ struct cps8601 {
 	u16			debug_reg;
 };
 
+/* the one 2-0041 instance on the board, set from probe for the atomic
+ * glink rx hook (see cps8601_glink_rx) */
+static struct cps8601 *cps8601_singleton;
+
+/* erhai_otg routes every inbound pmic_glink message owned by 0x8011 here;
+ * any such message after a rail request is the ADSP ACK we gate on (the
+ * vendor client matched its own owner the same way). Atomic context. */
+static void cps8601_glink_rx(const void *data, size_t len)
+{
+	struct cps8601 *chip = READ_ONCE(cps8601_singleton);
+
+	if (chip)
+		complete(&chip->hboost_ack);
+}
+
 static int cps8601_hboost_req(struct cps8601 *chip, u8 code)
 {
 	struct cps8601_hboost_msg msg = { };
-	int ret;
+	int ret, i;
 
 	/* ride on the erhai_otg client: a dedicated 0x8011 client never gets
 	 * a PDR attachment and blocks in pmic_glink_client_register */
@@ -190,12 +208,28 @@ static int cps8601_hboost_req(struct cps8601 *chip, u8 code)
 	msg.hdr.opcode = cpu_to_le32(CPS8601_HBOOST_OPCODE);
 	msg.code = code;
 
-	ret = erhai_otg_glink_send_raw(&msg, sizeof(msg));
-	if (ret)
-		return ret;
-	/* the ACK lands in the otg callback; the rail itself settles fast */
-	msleep(300);
-	return 0;
+	/*
+	 * Vendor set_boost_work_func: re-send every 512 ms until the ADSP
+	 * ACKs, up to ~60 rounds (~30 s — charger_pd is still attaching for
+	 * the first seconds after boot and silently drops 0x8011 requests
+	 * until then).  The Android bugreport shows retry=59 before the
+	 * first success; a blind send plus a fixed sleep just NACKs the
+	 * chip.  Gate on the routed ACK instead of sleeping.
+	 */
+	for (i = 0; i < 60; i++) {
+		reinit_completion(&chip->hboost_ack);
+		ret = erhai_otg_glink_send_raw(&msg, sizeof(msg));
+		if (ret)
+			return ret;
+		if (wait_for_completion_timeout(&chip->hboost_ack,
+						msecs_to_jiffies(512))) {
+			dev_dbg(chip->dev, "hboost %u ACKed (round %d)\n",
+				code, i + 1);
+			return 0;
+		}
+	}
+	dev_warn(chip->dev, "hboost %u: no ADSP ACK in %d rounds\n", code, i);
+	return -ETIMEDOUT;
 }
 
 /*
@@ -649,6 +683,16 @@ static void cps8601_handle_rx_frame(struct cps8601 *chip)
 	}
 }
 
+/* RX_ATTACH runs in hard/atomic context but the 10 V rail request sleeps
+ * (ACK-gated glink round-trip) — vendor sends code 160 only from the attach
+ * event, never during init. */
+static void cps8601_attach_work(struct work_struct *work)
+{
+	struct cps8601 *chip = container_of(work, struct cps8601, attach_work);
+
+	cps8601_hboost_req(chip, CPS8601_HBOOST_ATTACH_CODE);
+}
+
 static irqreturn_t cps8601_irq(int irq, void *data)
 {
 	struct cps8601 *chip = data;
@@ -672,6 +716,7 @@ static irqreturn_t cps8601_irq(int irq, void *data)
 
 		cps8601_read16(chip, CPS8601_REG_PING_WIDTH, &width);
 		chip->present = true;
+		schedule_work(&chip->attach_work);
 		dev_info(chip->dev, "pen attached (ping width %d)\n", width);
 	}
 	if (active & CPS8601_IRQ_RX_DETACH) {
@@ -708,21 +753,20 @@ static void cps8601_init_work(struct work_struct *work)
 	__pm_stay_awake(chip->ws);
 
 	/* power the coil rail through the ADSP before touching the MCU.
-	 * Drop it to code 0 first: a warm rail request is a no-op on the
-	 * ADSP side, and an MCU latched in its shutdown registers only
-	 * wakes on a real power cycle. */
+	 * Vendor bring-up only raises the DEFAULT (7 V) code here — the
+	 * 10 V attach code is sent from the RX_ATTACH IRQ, once a pen is
+	 * actually detected.  The ACK-gated request mirrors the vendor's
+	 * 512 ms × ~60 retry loop. */
 	ret = cps8601_hboost_req(chip, CPS8601_HBOOST_DEFAULT_CODE);
 	if (ret)
 		dev_warn(chip->dev, "hboost default failed: %d\n", ret);
-	msleep(400);
-	ret = cps8601_hboost_req(chip, CPS8601_HBOOST_ATTACH_CODE);
-	if (ret)
-		dev_warn(chip->dev, "hboost rail request failed: %d\n", ret);
-	msleep(500);
+	/* vendor: first I2C lands ~3.2 s after the rail ACK; the MCU needs
+	 * that much after rail-up before it decodes the bus */
+	msleep(1500);
 
 	cps8601_power_on(chip);
 
-	for (tries = 0; tries < 5; tries++) {
+	for (tries = 0; tries < 10; tries++) {
 		ret = cps8601_read16(chip, CPS8601_REG_CHIP_ID, &id);
 		if (!ret && id == CPS8601_CHIP_ID)
 			break;
@@ -981,6 +1025,10 @@ static int cps8601_probe(struct i2c_client *client)
 	chip->ws = wakeup_source_register(dev, "cps8601");
 	INIT_WORK(&chip->init_work, cps8601_init_work);
 	INIT_DELAYED_WORK(&chip->ready_work, cps8601_ready_work);
+	INIT_WORK(&chip->attach_work, cps8601_attach_work);
+	init_completion(&chip->hboost_ack);
+	WRITE_ONCE(cps8601_singleton, chip);
+	erhai_otg_glink_set_rx_hook(cps8601_glink_rx);
 	schedule_work(&chip->init_work);
 
 	return 0;
@@ -990,7 +1038,10 @@ static void cps8601_remove(struct i2c_client *client)
 {
 	struct cps8601 *chip = i2c_get_clientdata(client);
 
+	erhai_otg_glink_set_rx_hook(NULL);
+	WRITE_ONCE(cps8601_singleton, NULL);
 	cancel_work_sync(&chip->init_work);
+	cancel_work_sync(&chip->attach_work);
 	cancel_delayed_work_sync(&chip->ready_work);
 	/* free the IRQ before touching the power lines: shutting the chip
 	 * down edges INT, and the handler must not run against an
