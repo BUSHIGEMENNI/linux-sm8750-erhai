@@ -299,7 +299,7 @@ static int wcd939x_usbss_set(struct wcd939x_usbss *usbss)
 	usbss->fc_routed = false;
 
 	dev_info(&usbss->client->dev,
-		 "erhai usbss: set mode=%u svid=%04x orient=%d -> usb=%d dp=%d audio=%d dp_active=%d\n",
+		 "erhai usbss: set mode=%lu svid=%04x orient=%d -> usb=%d dp=%d audio=%d dp_active=%d\n",
 		 usbss->mode, usbss->svid, usbss->orientation,
 		 enable_usb, enable_dp, enable_audio, usbss->dp_active);
 
