@@ -710,8 +710,25 @@ static int sc820cs_init_state(struct v4l2_subdev *sd,
 			.height = supported_modes[0].height,
 		},
 	};
+	struct v4l2_rect *crop;
+	int ret;
 
-	return sc820cs_set_pad_format(sd, state, &fmt);
+	ret = sc820cs_set_pad_format(sd, state, &fmt);
+	if (ret)
+		return ret;
+
+	/* get_selection serves V4L2_SEL_TGT_CROP straight from the state;
+	 * leave it zeroed and the crop reads back as 0x0, which makes
+	 * libcamera warn and default the analogue rectangle itself.  The
+	 * vendor register table carries no array offset, so anchor the
+	 * crop at (0,0) covering the whole active mode. */
+	crop = v4l2_subdev_state_get_crop(state, 0);
+	crop->left = 0;
+	crop->top = 0;
+	crop->width = supported_modes[0].width;
+	crop->height = supported_modes[0].height;
+
+	return 0;
 }
 
 static const struct v4l2_subdev_video_ops sc820cs_video_ops = {
