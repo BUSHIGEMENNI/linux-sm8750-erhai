@@ -514,7 +514,9 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
 #define SC1320CS_VTS_DEF	6404
 #define SC1320CS_HBLANK		1250
 #define SC1320CS_VBLANK_MIN	32
-#define SC1320CS_VBLANK_MAX	0xffff
+/* height + vblank must stay inside the 16-bit VTS register, so the upper
+ * bound is whatever the height leaves, not the register's own 0xffff. */
+#define SC1320CS_VBLANK_MAX	(0xffff - SC1320CS_NATIVE_HEIGHT)
 #define SC1320CS_EXPOSURE_MAX	(SC1320CS_VTS_DEF - 8)
 #define SC1320CS_EXPOSURE_DEF	0x18f
 #define SC1320CS_AGAIN_MAX	255

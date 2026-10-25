@@ -1297,6 +1297,15 @@ static void pps_ws(struct work_struct *work)
 static int pps_state_show(struct seq_file *s, void *v)
 {
 	struct erhai_pps *p = s->private;
+	const char *cp_state;
+	bool buck_off;
+
+	/* pps_cp_is_engaged() lazily resolves the charge-pump symbols; take
+	 * the same lock the worker uses so the one-time init cannot race. */
+	mutex_lock(&pps_lock);
+	cp_state = pps_cp_is_engaged() ? "on" : "off";
+	buck_off = p->buck_off;
+	mutex_unlock(&pps_lock);
 
 	seq_printf(s, "pps_enable %d\nstate %s\nlast_exit %s\n",
 		   pps_enable, pps_state_names[p->state],
@@ -1309,9 +1318,9 @@ static int pps_state_show(struct seq_file *s, void *v)
 			   p->temp_c);
 	seq_printf(s, "sessions %llu entries %u exits %u cp %s (eng %u drop %u attempts %u) buck %s\n",
 		   p->sessions, p->entries, p->exits,
-		   pps_cp_is_engaged() ? "on" : "off",
+		   cp_state,
 		   p->cp_engages, p->cp_drops, p->cp_rearms,
-		   p->buck_off ? "suspended" : "on");
+		   buck_off ? "suspended" : "on");
 	return 0;
 }
 DEFINE_SHOW_ATTRIBUTE(pps_state);
@@ -1375,8 +1384,11 @@ static void __exit erhai_pps_exit(void)
 
 	if (!p)
 		return;
-	mutex_lock(&pps_lock);
+	/* Cancel before taking the lock: pps_ws() takes pps_lock on entry, so
+	 * holding it across cancel_delayed_work_sync() deadlocks whenever the
+	 * work is already running. */
 	cancel_delayed_work_sync(&p->work);
+	mutex_lock(&pps_lock);
 	if (p->state != PPS_IDLE) {
 		pps_cp_drop();
 		pps_revert(p);
