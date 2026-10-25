@@ -88,7 +88,11 @@ static const struct erhai_pps_sc_api *pps_sc_cp_get(void)
 
 	/* Latch only on success: the charge-pump module may still be loading
 	 * when this engine first looks for it, and a permanent NULL here
-	 * would silently degrade every later session to buck charging. */
+	 * would silently degrade every later session to buck charging.
+	 * Only symbols that actually resolved may be put back — symbol_put()
+	 * on a name that is absent from the kernel BUG_ON()s in
+	 * __symbol_put() (kernel/module/main.c), and "module not loaded yet"
+	 * is exactly the case this retry exists for. */
 	if (!resolved) {
 		api.snapshot = (void *)symbol_get(sc8547a_pps_snapshot);
 		api.cp_engaged = (void *)symbol_get(sc8547a_pps_cp_engaged);
@@ -97,11 +101,16 @@ static const struct erhai_pps_sc_api *pps_sc_cp_get(void)
 		api.cp_disengage = (void *)symbol_get(sc8547a_pps_cp_disengage);
 		if (!api.snapshot || !api.cp_engaged || !api.cp_engage ||
 		    !api.cp_feed || !api.cp_disengage) {
-			symbol_put(sc8547a_pps_snapshot);
-			symbol_put(sc8547a_pps_cp_engaged);
-			symbol_put(sc8547a_pps_cp_engage);
-			symbol_put(sc8547a_pps_cp_feed);
-			symbol_put(sc8547a_pps_cp_disengage);
+			if (api.snapshot)
+				symbol_put(sc8547a_pps_snapshot);
+			if (api.cp_engaged)
+				symbol_put(sc8547a_pps_cp_engaged);
+			if (api.cp_engage)
+				symbol_put(sc8547a_pps_cp_engage);
+			if (api.cp_feed)
+				symbol_put(sc8547a_pps_cp_feed);
+			if (api.cp_disengage)
+				symbol_put(sc8547a_pps_cp_disengage);
 			memset(&api, 0, sizeof(api));
 			return NULL;
 		}
