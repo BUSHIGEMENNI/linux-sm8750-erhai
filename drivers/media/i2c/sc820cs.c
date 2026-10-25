@@ -868,7 +868,7 @@ static int sc820cs_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
 	struct sc820cs *sc820cs;
-	int ret;
+	int ret, i;
 
 	sc820cs = devm_kzalloc(dev, sizeof(*sc820cs), GFP_KERNEL);
 	if (!sc820cs)
@@ -895,6 +895,9 @@ static int sc820cs_probe(struct i2c_client *client)
 		return dev_err_probe(dev, -EINVAL,
 				     "xclk frequency not supported: %lu Hz\n",
 				     clk_get_rate(sc820cs->xclk));
+
+	for (i = 0; i < SC820CS_NUM_SUPPLIES; i++)
+		sc820cs->supplies[i].supply = sc820cs_supply_name[i];
 
 	ret = devm_regulator_bulk_get(dev, SC820CS_NUM_SUPPLIES,
 				      sc820cs->supplies);
