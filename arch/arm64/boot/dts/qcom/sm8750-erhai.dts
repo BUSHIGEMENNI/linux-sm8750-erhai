@@ -2437,11 +2437,11 @@
 	 *   IRQs 477/478/479/448/122/89, 605/376, 606/377
 	 *
 	 * PRE-WIRED ONLY: the 7.2 in-tree camss driver tops out at
-	 * qcom,sm8650-camss — nothing matches "qcom,sm8750-camss" yet, so
-	 * this node has no consumer.  status stays "disabled" until the
-	 * sm8750 camss port (upstream or Pad 3 tree) lands; the endpoints
-	 * are wired now so the sensors' remote-endpoint links are complete
-	 * from day one.
+	 * qcom,sm8650-camss — so the sm8750 RDI-lite camss port (ported from
+	 * TheMojoMan's linux-7.2 branch: CSIPHY0-5 + CSID-lite + VFE-lite only,
+	 * full TFE ISP is a future driver) now consumes this node.  cci0 below
+	 * stays disabled until the rear-sensor drivers land; the front sensor
+	 * sits on GENI i2c9 and does not need CCI.
 	 */
 	camss: isp@ad6d000 {
 		compatible = "qcom,sm8750-camss";
@@ -2541,7 +2541,7 @@
 		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
 		power-domain-names = "top";
 
-		status = "disabled";
+		status = "okay";
 
 		ports {
 			#address-cells = <1>;
