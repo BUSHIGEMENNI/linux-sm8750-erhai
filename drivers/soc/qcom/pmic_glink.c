@@ -103,6 +103,27 @@ struct pmic_glink_client *devm_pmic_glink_client_alloc(struct device *dev,
 }
 EXPORT_SYMBOL_GPL(devm_pmic_glink_client_alloc);
 
+static void pmic_glink_noop_cb(const void *data, size_t len, void *priv) {}
+static void pmic_glink_noop_pdr(void *priv, int state) {}
+
+/* Park a client's callbacks on no-ops: pmic_glink has no unregister API,
+ * so a client whose owner module is about to unload must stop pointing
+ * into soon-to-be-freed module text.  The client stays registered. */
+void pmic_glink_client_neuter(struct pmic_glink_client *client)
+{
+	struct pmic_glink *pg = client->pg;
+	unsigned long flags;
+
+	/* The dispatch path reads these three fields under pg->client_lock,
+	 * so the teardown has to take the same lock or the two race. */
+	spin_lock_irqsave(&pg->client_lock, flags);
+	client->cb = pmic_glink_noop_cb;
+	client->pdr_notify = pmic_glink_noop_pdr;
+	client->priv = NULL;
+	spin_unlock_irqrestore(&pg->client_lock, flags);
+}
+EXPORT_SYMBOL_GPL(pmic_glink_client_neuter);
+
 void pmic_glink_client_register(struct pmic_glink_client *client)
 {
 	struct pmic_glink *pg = client->pg;
