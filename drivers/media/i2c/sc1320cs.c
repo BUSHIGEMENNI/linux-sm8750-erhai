@@ -460,7 +460,7 @@ static int sc1320cs_get_fmt(struct v4l2_subdev *sd,
 {
 	fmt->format.width = SC1320CS_NATIVE_WIDTH;
 	fmt->format.height = SC1320CS_NATIVE_HEIGHT;
-	fmt->format.code = MEDIA_BUS_FMT_SBGGR10_1X10;
+	fmt->format.code = MEDIA_BUS_FMT_SRGGB10_1X10;
 	fmt->format.field = V4L2_FIELD_NONE;
 	fmt->format.colorspace = V4L2_COLORSPACE_RAW;
 
@@ -474,7 +474,7 @@ static int sc1320cs_enum_mbus_code(struct v4l2_subdev *sd,
 	if (code->index > 0)
 		return -EINVAL;
 
-	code->code = MEDIA_BUS_FMT_SBGGR10_1X10;
+	code->code = MEDIA_BUS_FMT_SRGGB10_1X10;
 
 	return 0;
 }
@@ -483,7 +483,7 @@ static int sc1320cs_enum_frame_size(struct v4l2_subdev *sd,
 				    struct v4l2_subdev_state *state,
 				    struct v4l2_subdev_frame_size_enum *fse)
 {
-	if (fse->index > 0 || fse->code != MEDIA_BUS_FMT_SBGGR10_1X10)
+	if (fse->index > 0 || fse->code != MEDIA_BUS_FMT_SRGGB10_1X10)
 		return -EINVAL;
 
 	fse->min_width = SC1320CS_NATIVE_WIDTH;
