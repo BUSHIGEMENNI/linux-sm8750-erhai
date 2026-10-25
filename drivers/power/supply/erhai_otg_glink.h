@@ -49,6 +49,18 @@ bool erhai_otg_charge_inhibited(void);
 #define ERHAI_OTG_WLS_PEN_OWNER		0x8011
 typedef void (*erhai_otg_glink_rx_fn)(const void *data, size_t len);
 void erhai_otg_glink_set_rx_hook(erhai_otg_glink_rx_fn fn);
+
+struct pmic_glink_client;
+/*
+ * Register a pmic_glink client for a non-child device (see the comment
+ * in the .c).  Memory is owned by erhai_otg (eternal); the caller MUST
+ * call erhai_otg_glink_client_neuter() before unloading.
+ */
+struct pmic_glink_client *
+erhai_otg_glink_client_register_sibling(u32 id,
+					void (*cb)(const void *, size_t, void *),
+					void (*pdr)(void *, int), void *priv);
+void erhai_otg_glink_client_neuter(struct pmic_glink_client *client);
 #else
 static inline int erhai_otg_adsp_usb_prop(u32 property)
 {
