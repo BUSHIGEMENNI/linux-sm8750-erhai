@@ -214,6 +214,20 @@ static int cps8601_hboost_req(struct cps8601 *chip, u8 code)
 	struct cps8601_hboost_msg msg = { };
 	int ret, i;
 
+	/* Without our own glink client the only route left is the
+	 * battery_charger channel with a forged owner, and the ADSP drops
+	 * those: 60 x 512 ms of silence was measured (ge3816d8d8 boot,
+	 * 2026-10-25), and the reply path is not even wired here --
+	 * erhai_otg_glink_set_rx_hook() has no caller.  Retrying 60 rounds
+	 * would just make every caller (including remove()) wait ~30 s for
+	 * a result that cannot arrive, so say so and give up. */
+	if (!chip->pgclient) {
+		dev_warn_once(chip->dev,
+			      "hboost %u skipped: no glink client (pen charging unavailable)\n",
+			      code);
+		return -ENODEV;
+	}
+
 	/* ride on the erhai_otg client: a dedicated 0x8011 client never gets
 	 * a PDR attachment and blocks in pmic_glink_client_register */
 	msg.hdr.owner = cpu_to_le32(CPS8601_HBOOST_OWNER);
@@ -231,11 +245,7 @@ static int cps8601_hboost_req(struct cps8601 *chip, u8 code)
 	 */
 	for (i = 0; i < 60; i++) {
 		reinit_completion(&chip->hboost_ack);
-		if (chip->pgclient)
-			ret = pmic_glink_send(chip->pgclient,
-					      (void *)&msg, sizeof(msg));
-		else
-			ret = erhai_otg_glink_send_raw(&msg, sizeof(msg));
+		ret = pmic_glink_send(chip->pgclient, (void *)&msg, sizeof(msg));
 		if (ret && ret != -ECONNRESET)
 			return ret;
 		if (wait_for_completion_timeout(&chip->hboost_ack,
