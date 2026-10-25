@@ -2346,7 +2346,7 @@
 		compatible = "smartsens,sc820cs";
 		reg = <0x20>;
 
-		reset-gpios = <&tlmm 7 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&tlmm 7 GPIO_ACTIVE_LOW>;
 
 		dovdd-supply = <&vreg_l4b_1p8>;
 		avdd-supply = <&vreg_l16b_2p8>;
