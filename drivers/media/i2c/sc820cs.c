@@ -211,9 +211,9 @@ static const s64 sc820cs_link_freq_menu[] = {
 /* Bayer order: base BGGR (待硬件验证), rotated by mirror/flip.
  * Order: no flip, hflip, vflip, h+v flip. */
 static const u32 sc820cs_mbus_formats[] = {
-	MEDIA_BUS_FMT_SBGGR10_1X10,
+	MEDIA_BUS_FMT_SRGGB10_1X10,
 	MEDIA_BUS_FMT_SGBRG10_1X10,
-	MEDIA_BUS_FMT_SBGGR10_1X10,
+	MEDIA_BUS_FMT_SRGGB10_1X10,
 	MEDIA_BUS_FMT_SGRBG10_1X10,
 };
 
@@ -444,18 +444,21 @@ static int sc820cs_init_controls(struct sc820cs *sc820cs)
 			  SC820CS_AGAIN_STEP, SC820CS_AGAIN_DEFAULT);
 
 	sc820cs->hflip = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
-					   V4L2_CID_HFLIP, 0, 1, 1, 1);
+					   V4L2_CID_HFLIP, 0, 1, 1, 0);
 	if (sc820cs->hflip)
 		sc820cs->hflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
 
 	/*
-	 * The module sits 180 degrees from the natural readout.  Android
-	 * streams 0x3221 = 0x66 = BOTH flip [6:5] and mirror [2:1] set —
-	 * a 180-degree rotation needs the two together; V-only leaves the
-	 * image mirrored and the Bayer phase shifted.  Default both on.
+	 * Measured 2026-10-25 (frame correlation at both register states):
+	 * 0x00 -> 0x66 is a true 180-degree rotation of the readout, and the
+	 * 0x66 state is the one that comes out upside-down on this module —
+	 * so the un-flipped POR state is upright.  Default both flips OFF;
+	 * the rotated readout also moves the Bayer start, so the mbus code
+	 * below is SRGGB at 0x00 (the SBGGR layout belongs to the 0x66
+	 * state, phase-verified with a known-color object).
 	 */
 	sc820cs->vflip = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
-					   V4L2_CID_VFLIP, 0, 1, 1, 1);
+					   V4L2_CID_VFLIP, 0, 1, 1, 0);
 	if (sc820cs->vflip)
 		sc820cs->vflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
 
@@ -701,7 +704,7 @@ static int sc820cs_init_state(struct v4l2_subdev *sd,
 		.which = V4L2_SUBDEV_FORMAT_TRY,
 		.pad = 0,
 		.format = {
-			.code = MEDIA_BUS_FMT_SBGGR10_1X10,
+			.code = MEDIA_BUS_FMT_SRGGB10_1X10,
 			.width = supported_modes[0].width,
 			.height = supported_modes[0].height,
 		},
