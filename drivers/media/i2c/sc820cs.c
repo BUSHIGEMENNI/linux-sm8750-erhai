@@ -728,52 +728,67 @@ static const struct v4l2_subdev_internal_ops sc820cs_internal_ops = {
  */
 
 /*
- * Power-up sequence. The vendor camx power sequence lives in the
- * userspace sensor module; the delays below follow the SmartSens
- * convention (SC8238 driver: 1-2 ms after reset release, 10-20 ms
- * before the first I2C access). Order: reset asserted -> supplies
- * (dovdd, avdd, dvdd) -> MCLK -> reset deasserted. 待硬件验证.
+ * Power-up sequence, mirroring the vendor qcom cam_sensor_power_up()
+ * (AOSP camera driver, cam_sensor_core.c), which walks the DT
+ * power-sequence table one entry at a time:
+ *
+ *   1. regulators enabled individually in DT order (vio -> vana -> vdig),
+ *      each followed by its configured settle delay (~1 ms here),
+ *   2. MCLK enabled (19.2 MHz),
+ *   3. RESET asserted, held >= 1 ms, released, then ~10 ms before the
+ *      first I2C transaction.
+ *
+ * The reset line is ACTIVE_LOW in DT, so gpiod logical 1 == physical low
+ * == asserted, logical 0 == released (consumer.rst, active_low_semantics:
+ * gpiod_set_value_xxx() operates on the logical value).  The old code
+ * reasoned in raw levels twice over: the sensor was never asserted before
+ * the rails came up, and - after the DT flip to ACTIVE_LOW - it was held
+ * IN reset during the chip-id read, which is why reg 0x3107 read -5.
  */
-#define SC820CS_POWER_SETTLE_US		5000	/* supplies settle */
-#define SC820CS_MCLK_SETTLE_US		1000	/* MCLK before reset release */
-#define SC820CS_RESET_DELAY_US		20000	/* reset to first I2C */
+#define SC820CS_SUPPLY_SETTLE_US	1000	/* rail-to-rail settle */
+#define SC820CS_RESET_ASSERT_US		1000	/* reset assert width */
+#define SC820CS_RESET_RELEASE_US		10000	/* release to first I2C */
 
 static int sc820cs_power_on(struct device *dev)
 {
 	struct v4l2_subdev *sd = dev_get_drvdata(dev);
 	struct sc820cs *sc820cs = to_sc820cs(sd);
-	int ret;
+	int i, ret;
 
-	/* Hold the sensor in reset while powering up */
-	gpiod_set_value_cansleep(sc820cs->reset_gpio, 0);
+	/* Assert reset (logical 1 -> physical low) while the rails come up */
+	gpiod_set_value_cansleep(sc820cs->reset_gpio, 1);
 
-	ret = regulator_bulk_enable(SC820CS_NUM_SUPPLIES, sc820cs->supplies);
-	if (ret) {
-		dev_err(dev, "%s: failed to enable regulators\n", __func__);
-		return ret;
+	/* Rails one by one, DT order: dovdd (vio) -> avdd (vana) -> dvdd
+	 * (vdig), ~1 ms apart - not a simultaneous bulk_enable. */
+	for (i = 0; i < SC820CS_NUM_SUPPLIES; i++) {
+		ret = regulator_enable(sc820cs->supplies[i].consumer);
+		if (ret) {
+			dev_err(dev, "%s: failed to enable %s regulator\n",
+				__func__, sc820cs->supplies[i].supply);
+			goto err_reg_off;
+		}
+		usleep_range(SC820CS_SUPPLY_SETTLE_US,
+			     SC820CS_SUPPLY_SETTLE_US + 500);
 	}
-
-	usleep_range(SC820CS_POWER_SETTLE_US,
-		     SC820CS_POWER_SETTLE_US + 1000);
 
 	ret = clk_prepare_enable(sc820cs->xclk);
 	if (ret) {
 		dev_err(dev, "%s: failed to enable clock\n", __func__);
-		goto reg_off;
+		goto err_reg_off;
 	}
 
-	usleep_range(SC820CS_MCLK_SETTLE_US,
-		     SC820CS_MCLK_SETTLE_US + 1000);
-
-	/* Release reset */
+	/* Reset pulse: assert >= 1 ms, release, wait ~10 ms for the sensor
+	 * boot ROM before the first I2C access. */
 	gpiod_set_value_cansleep(sc820cs->reset_gpio, 1);
-	usleep_range(SC820CS_RESET_DELAY_US,
-		     SC820CS_RESET_DELAY_US + 1000);
+	usleep_range(SC820CS_RESET_ASSERT_US, SC820CS_RESET_ASSERT_US + 500);
+	gpiod_set_value_cansleep(sc820cs->reset_gpio, 0);
+	usleep_range(SC820CS_RESET_RELEASE_US, SC820CS_RESET_RELEASE_US + 2000);
 
 	return 0;
 
-reg_off:
-	regulator_bulk_disable(SC820CS_NUM_SUPPLIES, sc820cs->supplies);
+err_reg_off:
+	while (i--)
+		regulator_disable(sc820cs->supplies[i].consumer);
 
 	return ret;
 }
@@ -783,9 +798,10 @@ static int sc820cs_power_off(struct device *dev)
 	struct v4l2_subdev *sd = dev_get_drvdata(dev);
 	struct sc820cs *sc820cs = to_sc820cs(sd);
 
-	gpiod_set_value_cansleep(sc820cs->reset_gpio, 0);
-	regulator_bulk_disable(SC820CS_NUM_SUPPLIES, sc820cs->supplies);
+	/* Mirror of power-up: hold reset asserted, stop MCLK, rails down */
+	gpiod_set_value_cansleep(sc820cs->reset_gpio, 1);
 	clk_disable_unprepare(sc820cs->xclk);
+	regulator_bulk_disable(SC820CS_NUM_SUPPLIES, sc820cs->supplies);
 
 	return 0;
 }
@@ -904,8 +920,11 @@ static int sc820cs_probe(struct i2c_client *client)
 	if (ret)
 		return dev_err_probe(dev, ret, "failed to get regulators\n");
 
+	/* GPIOD_OUT_HIGH is logical assert: with the ACTIVE_LOW DT flag this
+	 * drives the physical pin LOW, so the sensor starts (and stays) in
+	 * reset until sc820cs_power_on() pulses it. */
 	sc820cs->reset_gpio = devm_gpiod_get_optional(dev, "reset",
-						      GPIOD_OUT_LOW);
+						      GPIOD_OUT_HIGH);
 	if (IS_ERR(sc820cs->reset_gpio))
 		return dev_err_probe(dev, PTR_ERR(sc820cs->reset_gpio),
 				     "failed to get reset gpio\n");
