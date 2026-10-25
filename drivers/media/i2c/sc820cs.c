@@ -215,13 +215,16 @@ static const s64 sc820cs_link_freq_menu[] = {
 	SC820CS_LINK_FREQ,
 };
 
-/* Bayer order: base BGGR (待硬件验证), rotated by mirror/flip.
+/* Bayer order at the un-flipped readout is BGGR (hardware-verified: the
+ * yellow-object test reads yellow with this code).  A readout rotation
+ * moves the CFA start, so the four flip combinations map as
+ * BGGR -> GBRG (h) -> GRBG (v) -> RGGB (both); same mapping as imx219.
  * Order: no flip, hflip, vflip, h+v flip. */
 static const u32 sc820cs_mbus_formats[] = {
 	MEDIA_BUS_FMT_SBGGR10_1X10,
 	MEDIA_BUS_FMT_SGBRG10_1X10,
-	MEDIA_BUS_FMT_SBGGR10_1X10,
 	MEDIA_BUS_FMT_SGRBG10_1X10,
+	MEDIA_BUS_FMT_SRGGB10_1X10,
 };
 
 static const char * const sc820cs_test_pattern_menu[] = {
