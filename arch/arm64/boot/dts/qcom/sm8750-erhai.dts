@@ -2430,121 +2430,220 @@
 	};
 
 	/*
-	 * CAMSS receive pipeline — RDI-LITE-ONLY variant, pre-wired.
-	 * CSIPHY0-5 + 2 CSID-lite + 2 VFE-lite (the only sun blocks that map
-	 * to mainline gen3 ops).  All 10 reg windows and all 10 IRQs are
-	 * verified against the live Android DT by TheMojoMan:
-	 *   csiphy0-5    ada9000/adab000/adad000/adaf000/adb1000/adb3000 (0x2000)
-	 *   csid_lite0/1 ad6d000 / ad72000
-	 *   vfe_lite0/1  ad6e000 / ad73000  (= csid_lite + 0x1000, the sm8650
-	 *     mainline convention; downstream's single "ife-lite" window is a
-	 *     0x2800 superset starting at the csid_lite base, i.e. consistent)
-	 *   IRQs 477/478/479/448/122/89, 605/376, 606/377
+	 * CAMSS — full qcom,sm8750-camss binding node.
 	 *
-	 * PRE-WIRED ONLY: the 7.2 in-tree camss driver tops out at
-	 * qcom,sm8650-camss — so the sm8750 RDI-lite camss port (ported from
-	 * TheMojoMan's linux-7.2 branch: CSIPHY0-5 + CSID-lite + VFE-lite only,
-	 * full TFE ISP is a future driver) now consumes this node.  cci0 below
-	 * stays disabled until the rear-sensor drivers land; the front sensor
-	 * sits on GENI i2c9 and does not need CCI.
+	 * Rewritten to the official SM8750 CAMSS DT binding
+	 * (Documentation/devicetree/bindings/media/qcom,sm8750-camss.yaml):
+	 * 19 reg windows, 35 clocks, 16 IRQs, 4 interconnect paths and the
+	 * 4-GDSC power-domain set (ife0/ife1/ife2/top).  Bases, IRQs and clock
+	 * names are cross-checked against the live Android DT (dtbo fragment@91):
+	 *   csid0/1/2     ad27000/ad2a000/ad2d000 (0x2b00)   irq 601/603/431
+	 *   csid_lite0/1  ad6d000/ad72000 (0xa00)            irq 605/376
+	 *   csiphy0-5     ada9000..adb3000 (0x2000)          irq 477/478/479/448/122/89
+	 *   csitpg0-2     ad8b000/ad8c000/ad8d000 (0x400)
+	 *   vfe0/1/2      ac86000/ac96000/aca6000 (0x10000)  irq 433/436/457
+	 *   vfe_lite0/1   ad6d000/ad72000 (0x2800)           irq 606/377
+	 *
+	 * vfe_lite0/1 deliberately reuse the csid_lite base with a 0x2800
+	 * superset window (downstream "ife-lite" layout): the csid-980 ops in
+	 * the upstream driver handle the shared window, so the overlap between
+	 * csid_lite0/1 (0xa00) and vfe_lite0/1 (0x2800) is intentional — do not
+	 * "fix" it.
+	 *
+	 * The in-tree driver (csiphy_res_8750/csid_res_8750/icc_res_sm8750,
+	 * official v5 patch set) only instantiates CSIPHY + CSID entities and
+	 * consumes the "top" power domain plus the "ahb"/"hf_mnoc" ICC paths;
+	 * the remaining windows/clocks/PDs satisfy the binding and sit ready
+	 * for the full TFE driver.
+	 *
+	 * CSIPHY analog rails follow the vendor wiring (dtbo regulator symbols:
+	 * 0p9 = L1F on phy0/1/3/5 / L3I on phy2/4, 1p2 = L3G on all six).
+	 *
+	 * SMMU SID 0x1c00 from the live Android DT (cam_smmu_ife context
+	 * bank, mask 0x0 as Android has it).  Without it VIDIOC_REQBUFS
+	 * falls back to swiotlb and a 16 MB RAW frame never fits.
 	 */
-	camss: isp@ad6d000 {
+	camss: isp@ad27000 {
 		compatible = "qcom,sm8750-camss";
 
-		reg = <0 0x0ada9000 0 0x2000>,
+		reg = <0 0x0ad27000 0 0x2b00>,
+		      <0 0x0ad2a000 0 0x2b00>,
+		      <0 0x0ad2d000 0 0x2b00>,
+		      <0 0x0ad6d000 0 0xa00>,
+		      <0 0x0ad72000 0 0xa00>,
+		      <0 0x0ada9000 0 0x2000>,
 		      <0 0x0adab000 0 0x2000>,
 		      <0 0x0adad000 0 0x2000>,
 		      <0 0x0adaf000 0 0x2000>,
 		      <0 0x0adb1000 0 0x2000>,
 		      <0 0x0adb3000 0 0x2000>,
-		      <0 0x0ad6d000 0 0xa00>,
-		      <0 0x0ad72000 0 0xa00>,
+		      <0 0x0ad8b000 0 0x400>,
+		      <0 0x0ad8c000 0 0x400>,
+		      <0 0x0ad8d000 0 0x400>,
+		      <0 0x0ac86000 0 0x10000>,
+		      <0 0x0ac96000 0 0x10000>,
+		      <0 0x0aca6000 0 0x10000>,
 		      <0 0x0ad6d000 0 0x2800>,
 		      <0 0x0ad72000 0 0x2800>;
-		reg-names = "csiphy0",
-			    "csiphy1",
-			    "csiphy2",
-			    "csiphy3",
-			    "csiphy4",
-			    "csiphy5",
-			    "csid_lite0",
-			    "csid_lite1",
-			    "vfe_lite0",
-			    "vfe_lite1";
+		reg-names = "csid0",
+		            "csid1",
+		            "csid2",
+		            "csid_lite0",
+		            "csid_lite1",
+		            "csiphy0",
+		            "csiphy1",
+		            "csiphy2",
+		            "csiphy3",
+		            "csiphy4",
+		            "csiphy5",
+		            "csitpg0",
+		            "csitpg1",
+		            "csitpg2",
+		            "vfe0",
+		            "vfe1",
+		            "vfe2",
+		            "vfe_lite0",
+		            "vfe_lite1";
 
-		clocks = <&camcc CAM_CC_CSIPHY0_CLK>,
-			 <&camcc CAM_CC_CSI0PHYTIMER_CLK>,
-			 <&camcc CAM_CC_CSIPHY1_CLK>,
-			 <&camcc CAM_CC_CSI1PHYTIMER_CLK>,
-			 <&camcc CAM_CC_CSIPHY2_CLK>,
-			 <&camcc CAM_CC_CSI2PHYTIMER_CLK>,
-			 <&camcc CAM_CC_CSIPHY3_CLK>,
-			 <&camcc CAM_CC_CSI3PHYTIMER_CLK>,
-			 <&camcc CAM_CC_CSIPHY4_CLK>,
-			 <&camcc CAM_CC_CSI4PHYTIMER_CLK>,
-			 <&camcc CAM_CC_CSIPHY5_CLK>,
-			 <&camcc CAM_CC_CSI5PHYTIMER_CLK>,
-			 <&camcc CAM_CC_IFE_LITE_AHB_CLK>,
-			 <&camcc CAM_CC_IFE_LITE_CSID_CLK>,
-			 <&camcc CAM_CC_IFE_LITE_CPHY_RX_CLK>,
-			 <&gcc GCC_CAMERA_HF_AXI_CLK>,
-			 <&camcc CAM_CC_CAMNOC_RT_AXI_CLK>,
-			 <&camcc CAM_CC_IFE_LITE_CLK>,
-			 <&camcc CAM_CC_QDSS_DEBUG_XO_CLK>,
-			 <&camcc CAM_CC_CAMNOC_RT_IFE_LITE_CLK>;
-		clock-names = "csiphy0",
-			      "csiphy0_timer",
-			      "csiphy1",
-			      "csiphy1_timer",
-			      "csiphy2",
-			      "csiphy2_timer",
-			      "csiphy3",
-			      "csiphy3_timer",
-			      "csiphy4",
-			      "csiphy4_timer",
-			      "csiphy5",
-			      "csiphy5_timer",
-			      "vfe_lite_ahb",
-			      "vfe_lite_csid",
-			      "vfe_lite_cphy_rx",
-			      "gcc_axi_hf",
-			      "camnoc_axi",
-			      "vfe_lite",
-			      "qdss_debug_xo",
-			      "camnoc_rt_ife_lite";
+		clocks = <&camcc CAM_CC_CAMNOC_NRT_AXI_CLK>,
+		         <&camcc CAM_CC_CAMNOC_RT_AXI_CLK>,
+		         <&camcc CAM_CC_CAM_TOP_AHB_CLK>,
+		         <&camcc CAM_CC_CAM_TOP_FAST_AHB_CLK>,
+		         <&camcc CAM_CC_CAMNOC_RT_TFE_0_MAIN_CLK>,
+		         <&camcc CAM_CC_CAMNOC_RT_TFE_1_MAIN_CLK>,
+		         <&camcc CAM_CC_CAMNOC_RT_TFE_2_MAIN_CLK>,
+		         <&camcc CAM_CC_CAMNOC_RT_IFE_LITE_CLK>,
+		         <&camcc CAM_CC_CSID_CLK>,
+		         <&camcc CAM_CC_CSID_CSIPHY_RX_CLK>,
+		         <&camcc CAM_CC_CSIPHY0_CLK>,
+		         <&camcc CAM_CC_CSI0PHYTIMER_CLK>,
+		         <&camcc CAM_CC_CSIPHY1_CLK>,
+		         <&camcc CAM_CC_CSI1PHYTIMER_CLK>,
+		         <&camcc CAM_CC_CSIPHY2_CLK>,
+		         <&camcc CAM_CC_CSI2PHYTIMER_CLK>,
+		         <&camcc CAM_CC_CSIPHY3_CLK>,
+		         <&camcc CAM_CC_CSI3PHYTIMER_CLK>,
+		         <&camcc CAM_CC_CSIPHY4_CLK>,
+		         <&camcc CAM_CC_CSI4PHYTIMER_CLK>,
+		         <&camcc CAM_CC_CSIPHY5_CLK>,
+		         <&camcc CAM_CC_CSI5PHYTIMER_CLK>,
+		         <&gcc GCC_CAMERA_HF_AXI_CLK>,
+		         <&gcc GCC_CAMERA_SF_AXI_CLK>,
+		         <&camcc CAM_CC_TFE_0_MAIN_CLK>,
+		         <&camcc CAM_CC_TFE_0_MAIN_FAST_AHB_CLK>,
+		         <&camcc CAM_CC_TFE_1_MAIN_CLK>,
+		         <&camcc CAM_CC_TFE_1_MAIN_FAST_AHB_CLK>,
+		         <&camcc CAM_CC_TFE_2_MAIN_CLK>,
+		         <&camcc CAM_CC_TFE_2_MAIN_FAST_AHB_CLK>,
+		         <&camcc CAM_CC_IFE_LITE_CLK>,
+		         <&camcc CAM_CC_IFE_LITE_AHB_CLK>,
+		         <&camcc CAM_CC_IFE_LITE_CPHY_RX_CLK>,
+		         <&camcc CAM_CC_IFE_LITE_CSID_CLK>,
+		         <&camcc CAM_CC_QDSS_DEBUG_XO_CLK>;
+		clock-names = "camnoc_nrt_axi",
+		              "camnoc_rt_axi",
+		              "cpas_ahb",
+		              "cpas_fast_ahb",
+		              "cpas_vfe0",
+		              "cpas_vfe1",
+		              "cpas_vfe2",
+		              "cpas_vfe_lite",
+		              "csid",
+		              "csid_csiphy_rx",
+		              "csiphy0",
+		              "csiphy0_timer",
+		              "csiphy1",
+		              "csiphy1_timer",
+		              "csiphy2",
+		              "csiphy2_timer",
+		              "csiphy3",
+		              "csiphy3_timer",
+		              "csiphy4",
+		              "csiphy4_timer",
+		              "csiphy5",
+		              "csiphy5_timer",
+		              "gcc_axi_hf",
+		              "gcc_axi_sf",
+		              "vfe0",
+		              "vfe0_fast_ahb",
+		              "vfe1",
+		              "vfe1_fast_ahb",
+		              "vfe2",
+		              "vfe2_fast_ahb",
+		              "vfe_lite",
+		              "vfe_lite_ahb",
+		              "vfe_lite_cphy_rx",
+		              "vfe_lite_csid",
+		              "qdss_debug_xo";
 
-		interrupts = <GIC_SPI 477 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 478 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 479 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 448 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 122 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 89 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 605 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 376 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 606 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 377 IRQ_TYPE_EDGE_RISING>;
-		interrupt-names = "csiphy0",
-				  "csiphy1",
-				  "csiphy2",
-				  "csiphy3",
-				  "csiphy4",
-				  "csiphy5",
-				  "csid_lite0",
-				  "csid_lite1",
-				  "vfe_lite0",
-				  "vfe_lite1";
+		interrupts = <GIC_SPI 601 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 603 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 431 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 605 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 376 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 477 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 478 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 479 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 448 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 122 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 89 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 433 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 436 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 457 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 606 IRQ_TYPE_EDGE_RISING>,
+		             <GIC_SPI 377 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "csid0",
+		                  "csid1",
+		                  "csid2",
+		                  "csid_lite0",
+		                  "csid_lite1",
+		                  "csiphy0",
+		                  "csiphy1",
+		                  "csiphy2",
+		                  "csiphy3",
+		                  "csiphy4",
+		                  "csiphy5",
+		                  "vfe0",
+		                  "vfe1",
+		                  "vfe2",
+		                  "vfe_lite0",
+		                  "vfe_lite1";
 
-		/*
-		 * SMMU SID 0x1c00 from the live Android DT (cam_smmu_ife
-		 * context bank, mask 0x0 as Android has it).  Without it
-		 * VIDIOC_REQBUFS falls back to swiotlb and a 16 MB RAW
-		 * frame never fits.
-		 */
+		interconnects = <&gem_noc MASTER_APPSS_PROC QCOM_ICC_TAG_ACTIVE_ONLY
+				 &config_noc SLAVE_CAMERA_CFG QCOM_ICC_TAG_ACTIVE_ONLY>,
+				<&mmss_noc MASTER_CAMNOC_HF QCOM_ICC_TAG_ALWAYS
+				 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+				<&mmss_noc MASTER_CAMNOC_SF QCOM_ICC_TAG_ALWAYS
+				 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>,
+				<&mmss_noc MASTER_CAMNOC_NRT_ICP_SF QCOM_ICC_TAG_ALWAYS
+				 &mc_virt SLAVE_EBI1 QCOM_ICC_TAG_ALWAYS>;
+		interconnect-names = "ahb", "hf_mnoc",
+				      "sf_mnoc", "sf_icp_mnoc";
+
 		iommus = <&apps_smmu 0x1c00 0x0>;
 		dma-coherent;
 
-		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
-		power-domain-names = "top";
+		power-domains = <&camcc CAM_CC_TFE_0_GDSC>,
+		                <&camcc CAM_CC_TFE_1_GDSC>,
+		                <&camcc CAM_CC_TFE_2_GDSC>,
+		                <&camcc CAM_CC_TITAN_TOP_GDSC>;
+		power-domain-names = "ife0",
+		                     "ife1",
+		                     "ife2",
+		                     "top";
+
+		vdd-csiphy0-0p9-supply = <&vreg_l1f_0p88>;
+		vdd-csiphy1-0p9-supply = <&vreg_l1f_0p88>;
+		vdd-csiphy2-0p9-supply = <&vreg_l3i_0p88>;
+		vdd-csiphy3-0p9-supply = <&vreg_l1f_0p88>;
+		vdd-csiphy4-0p9-supply = <&vreg_l3i_0p88>;
+		vdd-csiphy5-0p9-supply = <&vreg_l1f_0p88>;
+		vdd-csiphy0-1p2-supply = <&vreg_l3g_1p2>;
+		vdd-csiphy1-1p2-supply = <&vreg_l3g_1p2>;
+		vdd-csiphy2-1p2-supply = <&vreg_l3g_1p2>;
+		vdd-csiphy3-1p2-supply = <&vreg_l3g_1p2>;
+		vdd-csiphy4-1p2-supply = <&vreg_l3g_1p2>;
+		vdd-csiphy5-1p2-supply = <&vreg_l3g_1p2>;
 
 		status = "okay";
 
