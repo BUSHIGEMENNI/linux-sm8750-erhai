@@ -1071,19 +1071,21 @@ static void cps8601_remove(struct i2c_client *client)
 {
 	struct cps8601 *chip = i2c_get_clientdata(client);
 
-	/* Drop the rail request while the glink client still routes ACKs:
-	 * neuter() clears the callback and priv, so a request issued after it
-	 * waits out every retry (~30 s) even though the send succeeds. */
-	if (chip->pgclient)
-		cps8601_hboost_req(chip, 0);
-	cancel_work_sync(&chip->init_work);
-	cancel_work_sync(&chip->attach_work);
-	cancel_delayed_work_sync(&chip->ready_work);
-	/* free the IRQ before touching the power lines: shutting the chip
-	 * down edges INT, and the handler must not run against an
-	 * unregistered wakeup source afterwards */
+	/* Order matters for more than ACKs:
+	 *  - free_irq() first, so the handler cannot queue attach_work after
+	 *    we believe the work is cancelled;
+	 *  - cancel ready_work before init_work, because a ready_work retry
+	 *    re-schedules init_work;
+	 *  - drop the rail while the glink client still routes ACKs:
+	 *    neuter() clears the callback and priv, so a request issued after
+	 *    it waits out every retry (~30 s) even though the send succeeds. */
 	if (chip->irq_armed)
 		free_irq(chip->irq, chip);
+	cancel_delayed_work_sync(&chip->ready_work);
+	cancel_work_sync(&chip->init_work);
+	cancel_work_sync(&chip->attach_work);
+	if (chip->pgclient)
+		cps8601_hboost_req(chip, 0);
 	wakeup_source_unregister(chip->ws);
 	if (chip->ready)
 		cps8601_power_off(chip);
