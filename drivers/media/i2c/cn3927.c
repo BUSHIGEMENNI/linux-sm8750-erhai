@@ -200,14 +200,17 @@ static int cn3927_runtime_suspend(struct device *dev)
 		focus = CN3927_PARK_POSITION;
 
 	/* Park before cutting the rail.  A failed park leaves the supplies
-	 * on and the error propagates, so the PM core keeps the device
-	 * active: a later resume (and therefore the next focus write) can
-	 * still reach the hardware.  Returning an error after disabling the
-	 * rail would strand the device as "active but unpowered". */
+	 * on and fails the suspend with -EBUSY — the only two codes the PM
+	 * core treats as transient (drivers/base/power/runtime.c:472).  Any
+	 * other errno would be latched into dev->power.runtime_error and
+	 * every later rpm_resume() would short-circuit to -EINVAL
+	 * (runtime.c:796): the VCM would stay powered, with its regulator
+	 * enable_count never balanced, and dead until the device is rebound.
+	 * -EBUSY makes the core retry instead. */
 	for (; focus >= CN3927_PARK_POSITION; focus -= CN3927_PARK_STEP) {
 		err = cn3927_set_focus(cn3927, focus);
 		if (err)
-			return err;
+			return -EBUSY;
 
 		usleep_range(CN3927_MOVE_DELAY_US,
 			     CN3927_MOVE_DELAY_US + 100);
