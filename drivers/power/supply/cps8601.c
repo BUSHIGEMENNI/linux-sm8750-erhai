@@ -175,6 +175,7 @@ struct cps8601 {
 	int			pen_soc;
 	bool			present;
 	bool			ready;
+	bool			removing;	/* unbound: init/ready must not reschedule */
 
 	u32			ocp_uv;
 	u32			ovp_uv;
@@ -793,7 +794,7 @@ static void cps8601_init_work(struct work_struct *work)
 		dev_warn(chip->dev,
 			 "chip id mismatch: %#x (ret %d), retry %u/3 in 15 s\n",
 			 id, ret, chip->init_retries + 1);
-		if (chip->init_retries++ < 3) {
+		if (chip->init_retries++ < 3 && !chip->removing) {
 			gpiod_set_value(chip->sw_en_gpiod, 0);
 			gpiod_set_value(chip->scan_gpiod, 0);
 			gpiod_set_value(chip->boost_en_gpiod, 0);
@@ -827,6 +828,8 @@ static void cps8601_init_work(struct work_struct *work)
 	/* IRQ is armed only once the chip is up: the 2.5 s MCU boot window
 	 * would otherwise feed INT glitches into the handler before the
 	 * chip can answer, and the vendor driver registers it here too. */
+	if (chip->removing)
+		goto out_nopm;
 	ret = request_threaded_irq(chip->irq, NULL, cps8601_irq,
 				   IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
 				   "cps8601", chip);
@@ -834,6 +837,9 @@ static void cps8601_init_work(struct work_struct *work)
 		dev_err(chip->dev, "irq request failed: %d\n", ret);
 	else
 		chip->irq_armed = true;
+
+	if (chip->removing)
+		goto out_nopm;
 
 	/*
 	 * Vendor post-ready sequence (init_work_func +0x5a4..): drop the
@@ -856,13 +862,15 @@ static void cps8601_ready_work(struct work_struct *work)
 	struct cps8601 *chip = container_of(work, struct cps8601,
 					    ready_work.work);
 
-	if (!chip->ready) {
+	if (!chip->removing && !chip->ready) {
 		/* retry entry: the first power-on raced a slow-starting
 		 * ADSP (hboost service swallows early rail requests), so
 		 * re-run the whole rail + power-on + probe sequence */
 		schedule_work(&chip->init_work);
 		return;
 	}
+	if (chip->removing)
+		return;
 
 	__pm_stay_awake(chip->ws);
 	gpiod_set_value(chip->sw_en_gpiod, 0);
@@ -1072,18 +1080,32 @@ static void cps8601_remove(struct i2c_client *client)
 	struct cps8601 *chip = i2c_get_clientdata(client);
 
 	/* Order matters for more than ACKs:
-	 *  - free_irq() first, so the handler cannot queue attach_work after
-	 *    we believe the work is cancelled;
-	 *  - cancel ready_work before init_work, because a ready_work retry
-	 *    re-schedules init_work;
+	 *  - flip `removing` first so neither work item can arm the other or
+	 *    request the IRQ after we start tearing down;
+	 *  - the init/ready pair is a two-cycle loop (init_work registers the
+	 *    IRQ and arms ready_work; ready_work re-queues init_work on a
+	 *    retry), so it has to be drained twice — once to stop the pending
+	 *    timer, once more for whatever the in-flight worker re-armed
+	 *    before it saw `removing`;
+	 *  - free_irq() only after that drain, so `irq_armed` can no longer
+	 *    change under us; and before wakeup_source_unregister(), because
+	 *    the handler takes chip->ws;
+	 *  - cancel attach_work after free_irq(), since the handler is what
+	 *    queues it;
 	 *  - drop the rail while the glink client still routes ACKs:
 	 *    neuter() clears the callback and priv, so a request issued after
 	 *    it waits out every retry (~30 s) even though the send succeeds. */
-	if (chip->irq_armed)
-		free_irq(chip->irq, chip);
+	chip->removing = true;
+
 	cancel_delayed_work_sync(&chip->ready_work);
 	cancel_work_sync(&chip->init_work);
+	cancel_delayed_work_sync(&chip->ready_work);
+	cancel_work_sync(&chip->init_work);
+
+	if (chip->irq_armed)
+		free_irq(chip->irq, chip);
 	cancel_work_sync(&chip->attach_work);
+
 	if (chip->pgclient)
 		cps8601_hboost_req(chip, 0);
 	wakeup_source_unregister(chip->ws);
