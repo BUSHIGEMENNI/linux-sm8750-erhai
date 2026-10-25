@@ -84,10 +84,12 @@ struct erhai_pps_sc_api {
 static const struct erhai_pps_sc_api *pps_sc_cp_get(void)
 {
 	static struct erhai_pps_sc_api api;
-	static bool once;
+	static bool resolved;
 
-	if (!once) {
-		once = true;
+	/* Latch only on success: the charge-pump module may still be loading
+	 * when this engine first looks for it, and a permanent NULL here
+	 * would silently degrade every later session to buck charging. */
+	if (!resolved) {
 		api.snapshot = (void *)symbol_get(sc8547a_pps_snapshot);
 		api.cp_engaged = (void *)symbol_get(sc8547a_pps_cp_engaged);
 		api.cp_engage = (void *)symbol_get(sc8547a_pps_cp_engage);
@@ -103,8 +105,9 @@ static const struct erhai_pps_sc_api *pps_sc_cp_get(void)
 			memset(&api, 0, sizeof(api));
 			return NULL;
 		}
+		resolved = true;
 	}
-	return api.snapshot ? &api : NULL;
+	return resolved ? &api : NULL;
 }
 
 /* returns true while the CP is engaged AND the API is reachable */
