@@ -258,6 +258,7 @@ static int video_start_streaming(struct vb2_queue *q, unsigned int count)
 	struct v4l2_subdev *subdev;
 	int ret;
 
+	pr_info("stream walk: start_streaming enter (queue bufs=%u)\n", count);
 	ret = video_device_pipeline_alloc_start(vdev);
 	if (ret < 0) {
 		dev_err(video->camss->dev, "Failed to start media pipeline: %d\n", ret);
@@ -265,6 +266,7 @@ static int video_start_streaming(struct vb2_queue *q, unsigned int count)
 	}
 
 	ret = video_check_format(video);
+	pr_info("stream walk: pipeline_start ok, check_format ret=%d\n", ret);
 	if (ret < 0)
 		goto error;
 
@@ -275,13 +277,21 @@ static int video_start_streaming(struct vb2_queue *q, unsigned int count)
 			break;
 
 		pad = media_pad_remote_pad_first(pad);
-		if (!pad || !is_media_entity_v4l2_subdev(pad->entity))
+		if (!pad || !is_media_entity_v4l2_subdev(pad->entity)) {
+			dev_info(video->camss->dev,
+				 "stream walk stop at %s: %s\n", entity->name,
+				 pad ? "not a subdev" : "no remote pad");
 			break;
+		}
 
 		entity = pad->entity;
 		subdev = media_entity_to_v4l2_subdev(entity);
 
+		dev_info(video->camss->dev, "stream walk: s_stream(%s)\n",
+			 subdev->name);
 		ret = v4l2_subdev_call(subdev, video, s_stream, 1);
+		dev_info(video->camss->dev, "stream walk: %s ret=%d\n",
+			 subdev->name, ret);
 		if (ret < 0 && ret != -ENOIOCTLCMD)
 			goto error;
 	}
