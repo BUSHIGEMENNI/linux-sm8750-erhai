@@ -870,12 +870,12 @@ EXPORT_SYMBOL_GPL(erhai_otg_glink_set_rx_hook);
  * Register a pmic_glink client for a non-child device (e.g. the CPS8601
  * i2c driver).  devm_pmic_glink_client_alloc() derives the pmic_glink
  * handle from dev->parent drvdata, which is only correct for children of
- * the pmic_glink node — from an arbitrary device it dereferences a
+ * the pmic_glink node -- from an arbitrary device it dereferences a
  * foreign driver's private struct and the register path mutex-locks
  * garbage (the historical "0x8011 client register blocks forever").
- * Allocate here, on the real child, and let the caller keep the
- * callbacks valid; erhai_otg_glink_client_neuter() swaps them to no-ops
- * before the caller module unloads.
+ * This device IS a pmic_glink child, so allocating here hands out a
+ * correctly-wired client; the memory lives as long as this built-in
+ * driver.  Callers MUST pmic_glink_client_neuter() before unloading.
  */
 struct pmic_glink_client *
 erhai_otg_glink_client_register_sibling(u32 id,
@@ -885,43 +885,17 @@ erhai_otg_glink_client_register_sibling(u32 id,
 	struct erhai_otg *otg = erhai_otg_glink_dev;
 	struct pmic_glink_client *client;
 
-	if (!otg || !otg->client || !otg->client->pg)
+	if (!otg || !otg->client)
 		return ERR_PTR(-ENODEV);
 
-	/* allocate on the eternal otg device, not the caller: the client
-	 * stays in pg->clients forever (no unregister API) and must not
-	 * become freed memory when the caller module unloads */
-	client = devm_kzalloc(otg->dev, sizeof(*client), GFP_KERNEL);
-	if (!client)
-		return ERR_PTR(-ENOMEM);
-
-	client->pg = otg->client->pg;
-	client->id = id;
-	client->cb = cb;
-	client->pdr_notify = pdr;
-	client->priv = priv;
-	INIT_LIST_HEAD(&client->node);
+	client = devm_pmic_glink_client_alloc(otg->dev, id, cb, pdr, priv);
+	if (IS_ERR(client))
+		return client;
 
 	pmic_glink_client_register(client);
 	return client;
 }
 EXPORT_SYMBOL_GPL(erhai_otg_glink_client_register_sibling);
-
-static void erhai_otg_noop_cb(const void *data, size_t len, void *priv) {}
-static void erhai_otg_noop_pdr(void *priv, int state) {}
-
-/* Neuter a sibling client before its owner module unloads: the client
- * stays registered (pmic_glink has no unregister API) but calls into
- * static no-ops instead of freed module text. */
-void erhai_otg_glink_client_neuter(struct pmic_glink_client *client)
-{
-	if (!client)
-		return;
-	client->cb = erhai_otg_noop_cb;
-	client->pdr_notify = erhai_otg_noop_pdr;
-	client->priv = NULL;
-}
-EXPORT_SYMBOL_GPL(erhai_otg_glink_client_neuter);
 
 int erhai_otg_adsp_prop_set(u32 opcode, u32 property, u32 value)
 {
