@@ -605,11 +605,15 @@ static int wcd939x_usbss_mux_set(struct typec_mux_dev *mux,
 	 * steals D+/D- from the charge-pump path and kills SVOOC delivery
 	 * (2026-08-28: CHG_EN self-clear at CP enable, margin < 150 mV).
 	 * Only reprogram when the requested mode actually changed, or when
-	 * the charge path owns the crossbar AND DP is coming up (we must
-	 * take the crossbar back for AUX routing).
+	 * the charge path owns the crossbar AND DisplayPort is really coming
+	 * up: we then have to take the crossbar back for AUX routing.
+	 * TYPEC_STATE_MODAL is only 2 and is shared by USB2/USB3/audio, so a
+	 * mode>=MODAL test would steal the crossbar from the charge path on
+	 * every plain USB re-poll; the DP SVID is the actual signal.
 	 */
 	if (usbss->mode != state->mode ||
-	    (usbss->fc_routed && state->mode >= TYPEC_STATE_MODAL)) {
+	    (usbss->fc_routed && state->alt &&
+	     state->alt->svid == USB_TYPEC_DP_SID)) {
 		usbss->mode = state->mode;
 
 		if (state->alt)
