@@ -2347,7 +2347,12 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		status = "disabled";
+		/* The sc1320cs/cn3927 drivers are in the tree; enable CCI.
+		 * The erhai i2c-qcom-cci port defaults to erhai_cci_csr=0
+		 * (boot-safe: clocks+votes only, no CSR bring-up at probe);
+		 * erhai-boot-heal rebinds with erhai_cci_csr=1 once the
+		 * system is up, where a hang only costs a reboot. */
+		status = "okay";
 
 		/*
 		 * master[0] MUST exist even though the sensors sit on
@@ -2398,11 +2403,13 @@
 
 				/* MIPI CSI-2 D-PHY 4-lane out -> CAMSS CSIPHY4.
 				 * Android CAM_START_PHYDEV for PHY-4:
-				 * 1200 Mbps/lane -> DDR link clock 600 MHz.
-				 * endpoint parked with camss port@4 (see there):
-				 * a never-arriving remote blocks the async
-				 * notifier for every camera. */
+				 * 1200 Mbps/lane -> DDR link clock 600 MHz. */
 				port {
+					sc1320cs_ep: endpoint {
+						remote-endpoint = <&camss_csiphy4>;
+						data-lanes = <0 1 2 3>;
+						link-frequencies = /bits/ 64 <600000000>;
+					};
 				};
 			};
 
@@ -2545,15 +2552,19 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			/*
-			 * port@4 (rear SC1320CS, -> camss_csiphy4) is parked
-			 * until the sc1320cs/cn3927 drivers land: a remote that
-			 * never registers keeps the v4l2-async notifier from
-			 * completing, and the sensor->csiphy links are only
-			 * created in the .complete callback — one dead remote
-			 * blocks the front camera too.  Re-add port@4 together
-			 * with the sc1320cs_ep remote-endpoint below.
-			 */
+			/* Rear SC1320CS; the sc1320cs/cn3927 drivers are in
+			 * the tree now, so the remote completes the async
+			 * notifier (it sat parked until then — a never-arriving
+			 * remote blocked .complete for every camera). */
+			port@4 {
+				reg = <4>;
+
+				camss_csiphy4: endpoint {
+					remote-endpoint = <&sc1320cs_ep>;
+					data-lanes = <0 1 2 3>;
+				};
+			};
+
 			port@5 {
 				reg = <5>;
 
