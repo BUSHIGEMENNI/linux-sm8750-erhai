@@ -2352,6 +2352,17 @@
 		avdd-supply = <&vreg_l16b_2p8>;
 		dvdd-supply = <&vreg_l11b_1p0>;
 
+		/*
+		 * The MCLK gates in cambistmclkcc (0x1760000) live inside the
+		 * CAM_CC_TITAN_TOP_GDSC power domain: the vendor DT feeds this
+		 * GDSC to the sensor node as cam_clk-supply.  With the domain
+		 * off, the MCLK branch enable bit does not latch and
+		 * clk_prepare_enable() fails with -EBUSY.  The i2c core powers
+		 * the domain on before calling probe (PD_FLAG_ATTACH_POWER_ON),
+		 * and the driver's runtime PM keeps it aligned afterwards.
+		 */
+		power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>;
+
 		clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK>;
 		assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK_SRC>;
 		assigned-clock-rates = <19200000>;
