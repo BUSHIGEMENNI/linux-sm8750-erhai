@@ -436,6 +436,7 @@ struct erhai_pps {
 	unsigned long		cp_holdoff_until;
 	unsigned long		cp_engaged_since;
 	unsigned int		cp_low_cnt;	/* consecutive low-ibus polls */
+	bool			soc_hold;	/* exited on soc-limit, waiting to restart */
 	unsigned long		cp_fed_at;	/* last successful feed */
 	bool			inhibit_held;	/* policy inhibit seen this session */
 	unsigned int		cp_rearms;	/* pump attempts this plug */
@@ -606,6 +607,15 @@ static bool pps_deployable(struct erhai_pps *p, bool *vooc_engaged)
 	}
 	if (pps_read_battery(p))
 		return false;
+	/* Hysteresis around the stop threshold: a session that ended on
+	 * soc-limit stays down until the pack falls below pps_soc_restart,
+	 * otherwise the engine re-arms on the very next poll and oscillates
+	 * at the boundary. */
+	if (p->soc_hold) {
+		if (p->soc > (int)pps_soc_restart)
+			return false;
+		p->soc_hold = false;
+	}
 	if (p->soc >= (int)pps_soc_stop)
 		return false;
 	if (p->vbat_mv < (int)pps_vbat_min_mv ||
@@ -1115,6 +1125,7 @@ fail:
 			return;
 		}
 		if (p->soc >= (int)pps_soc_stop) {
+			p->soc_hold = true;	/* latch: only pps_soc_restart clears it */
 			pps_exit(p, PPS_EXIT_REASON_SOC);
 			return;
 		}
