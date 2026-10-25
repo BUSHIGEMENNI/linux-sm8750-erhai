@@ -114,6 +114,14 @@ void pmic_glink_client_neuter(struct pmic_glink_client *client)
 	struct pmic_glink *pg = client->pg;
 	unsigned long flags;
 
+	/* client->pg comes from the parent device's drvdata, which is only a
+	 * pmic_glink when the client really was allocated through
+	 * devm_pmic_glink_client_alloc().  A caller that reached us any other
+	 * way would hand us garbage here; stay harmless instead of writing
+	 * through it. */
+	if (!pg)
+		return;
+
 	/* The dispatch path reads these three fields under pg->client_lock,
 	 * so the teardown has to take the same lock or the two race. */
 	spin_lock_irqsave(&pg->client_lock, flags);
