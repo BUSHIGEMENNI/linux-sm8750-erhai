@@ -2730,17 +2730,17 @@
 		compatible = "smartsens,sc820cs";
 		reg = <0x10>;
 
-		/* Honest FRONT: apps mirror the selfie preview themselves and
-		 * keep captures un-mirrored (TheMojoMan's measured Snapshot
-		 * behaviour, his ed20467e4).
-		 *
-		 * rotation stays 0: with 180 the simple pipeline's orientation
-		 * handling wedges the spa libcamera source (nodes enumerate,
-		 * zero frames flow, Snapshot shows black) and the sensor has
-		 * no geometric flip register anyway.  The 180° mount fix will
-		 * come from a pixel-level patch (softisp or spa), not from
-		 * this property. */
-		orientation = <0>;
+		/*
+		 * The sensor's 0x00 state already streams upright (verified
+		 * with the ceiling-lamp centroid + the register sweep that
+		 * decoded 0x3221 bit5=V-flip, bit2=H-mirror).  GNOME Snapshot
+		 * still shows it upside-down because it applies the customary
+		 * 180° correction to any camera declared FRONT (front modules
+		 * are usually mounted inverted).  Declare the camera EXTERNAL
+		 * so no front-facing correction is applied and the upright
+		 * frame passes through untouched.
+		 */
+		orientation = <2>;
 		rotation = <0>;
 
 		reset-gpios = <&tlmm 7 GPIO_ACTIVE_LOW>;
