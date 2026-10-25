@@ -2398,13 +2398,11 @@
 
 				/* MIPI CSI-2 D-PHY 4-lane out -> CAMSS CSIPHY4.
 				 * Android CAM_START_PHYDEV for PHY-4:
-				 * 1200 Mbps/lane -> DDR link clock 600 MHz. */
+				 * 1200 Mbps/lane -> DDR link clock 600 MHz.
+				 * endpoint parked with camss port@4 (see there):
+				 * a never-arriving remote blocks the async
+				 * notifier for every camera. */
 				port {
-					sc1320cs_ep: endpoint {
-						remote-endpoint = <&camss_csiphy4>;
-						data-lanes = <0 1 2 3>;
-						link-frequencies = /bits/ 64 <600000000>;
-					};
 				};
 			};
 
@@ -2547,15 +2545,15 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			port@4 {
-				reg = <4>;
-
-				camss_csiphy4: endpoint {
-					remote-endpoint = <&sc1320cs_ep>;
-					data-lanes = <0 1 2 3>;
-				};
-			};
-
+			/*
+			 * port@4 (rear SC1320CS, -> camss_csiphy4) is parked
+			 * until the sc1320cs/cn3927 drivers land: a remote that
+			 * never registers keeps the v4l2-async notifier from
+			 * completing, and the sensor->csiphy links are only
+			 * created in the .complete callback — one dead remote
+			 * blocks the front camera too.  Re-add port@4 together
+			 * with the sc1320cs_ep remote-endpoint below.
+			 */
 			port@5 {
 				reg = <5>;
 
@@ -2616,6 +2614,12 @@
 	front_cam: camera-sensor@10 {
 		compatible = "smartsens,sc820cs";
 		reg = <0x10>;
+
+		/* Honest FRONT: apps mirror the selfie preview themselves and
+		 * keep captures un-mirrored (TheMojoMan's measured Snapshot
+		 * behaviour, his ed20467e4). */
+		orientation = <0>;
+		rotation = <0>;
 
 		reset-gpios = <&tlmm 7 GPIO_ACTIVE_LOW>;
 
