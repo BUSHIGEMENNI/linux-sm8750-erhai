@@ -444,15 +444,15 @@ static int sc820cs_init_controls(struct sc820cs *sc820cs)
 			  SC820CS_AGAIN_STEP, SC820CS_AGAIN_DEFAULT);
 
 	sc820cs->hflip = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
-					   V4L2_CID_HFLIP, 0, 1, 1, 0);
+					   V4L2_CID_HFLIP, 0, 1, 1, 1);
 	if (sc820cs->hflip)
 		sc820cs->hflip->flags |= V4L2_CTRL_FLAG_MODIFY_LAYOUT;
 
 	/*
-	 * The module sits 180 degrees from the natural readout; V-flip ON
-	 * (Android streams 0x3221=0x66) is the correct default.  Without
-	 * it the Bayer row order inverts and the soft ISP demosaics a
-	 * green cast on top of the upside-down image.
+	 * The module sits 180 degrees from the natural readout.  Android
+	 * streams 0x3221 = 0x66 = BOTH flip [6:5] and mirror [2:1] set —
+	 * a 180-degree rotation needs the two together; V-only leaves the
+	 * image mirrored and the Bayer phase shifted.  Default both on.
 	 */
 	sc820cs->vflip = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
 					   V4L2_CID_VFLIP, 0, 1, 1, 1);
