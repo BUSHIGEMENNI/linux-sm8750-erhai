@@ -211,9 +211,9 @@ static const s64 sc820cs_link_freq_menu[] = {
 /* Bayer order: base BGGR (待硬件验证), rotated by mirror/flip.
  * Order: no flip, hflip, vflip, h+v flip. */
 static const u32 sc820cs_mbus_formats[] = {
-	MEDIA_BUS_FMT_SRGGB10_1X10,
+	MEDIA_BUS_FMT_SBGGR10_1X10,
 	MEDIA_BUS_FMT_SGBRG10_1X10,
-	MEDIA_BUS_FMT_SRGGB10_1X10,
+	MEDIA_BUS_FMT_SBGGR10_1X10,
 	MEDIA_BUS_FMT_SGRBG10_1X10,
 };
 
@@ -701,7 +701,7 @@ static int sc820cs_init_state(struct v4l2_subdev *sd,
 		.which = V4L2_SUBDEV_FORMAT_TRY,
 		.pad = 0,
 		.format = {
-			.code = MEDIA_BUS_FMT_SRGGB10_1X10,
+			.code = MEDIA_BUS_FMT_SBGGR10_1X10,
 			.width = supported_modes[0].width,
 			.height = supported_modes[0].height,
 		},
