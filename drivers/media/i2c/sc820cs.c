@@ -495,7 +495,9 @@ static int sc820cs_enable_streams(struct v4l2_subdev *sd,
 	struct i2c_client *client = v4l2_get_subdevdata(&sc820cs->sd);
 	int ret;
 
+	pr_info("sc820cs: enable_streams pad=%u mask=%llx\n", pad, streams_mask);
 	ret = pm_runtime_resume_and_get(&client->dev);
+	pr_info("sc820cs: resume ret=%d\n", ret);
 	if (ret < 0)
 		return ret;
 
