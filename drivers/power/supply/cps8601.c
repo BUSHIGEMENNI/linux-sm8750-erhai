@@ -1071,7 +1071,8 @@ static void cps8601_remove(struct i2c_client *client)
 {
 	struct cps8601 *chip = i2c_get_clientdata(client);
 
-	erhai_otg_glink_client_neuter(chip->pgclient);
+	if (chip->pgclient)
+		pmic_glink_client_neuter(chip->pgclient);
 	cancel_work_sync(&chip->init_work);
 	cancel_work_sync(&chip->attach_work);
 	cancel_delayed_work_sync(&chip->ready_work);
