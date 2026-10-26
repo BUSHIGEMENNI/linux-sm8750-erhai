@@ -393,6 +393,16 @@ static int sc820cs_set_ctrl(struct v4l2_ctrl *ctrl)
 		val = SC820CS_FETCH_FLIP(val, sc820cs->vflip->val);
 		cci_write(sc820cs->regmap, SC820CS_REG_FLIP_MIRROR,
 			  val, &ret);
+		/*
+		 * Flipping the readout moves the CFA start pixel (BGGR base:
+		 * h->GBRG, v->GRBG, both->RGGB).  libcamera implements DT
+		 * rotation via these flips, so the stored format must follow
+		 * them -- a stale code demosaics with R and B swapped and
+		 * every warm colour turns blue.
+		 */
+		if (!ret)
+			format->code = sc820cs_get_format_code(sc820cs,
+							       format->code);
 		break;
 	default:
 		dev_dbg(&client->dev, "ctrl 0x%x not handled\n", ctrl->id);
