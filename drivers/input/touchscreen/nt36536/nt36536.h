@@ -200,7 +200,14 @@ typedef enum {
  * (EVENTBUFFER_EXT_CMD, EVENTBUFFER_EXT_PEN_MODE_ON/OFF).
  */
 #define NVT_CMD_EXT		0x7F
-#define NVT_EXT_PEN_SCAN_ON	0x10
+/*
+ * Pen scan-on sub-command, one per stylus vendor.  0x10/0x11 is the generic
+ * fallback pair; the OPPO Pencil 2 shipped with this device (pen type 5,
+ * MAXEYE_3RD per the OnePlus OSS mapping) answers to 0x18 -- the Android
+ * bugreport shows "send Cmd 0x7F 0x18 success" right before pen reports
+ * start.
+ */
+#define NVT_EXT_PEN_SCAN_ON	0x18
 #define NVT_EXT_PEN_SCAN_OFF	0x11
 
 //---SPI READ/WRITE---
