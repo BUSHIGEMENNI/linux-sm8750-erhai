@@ -215,16 +215,20 @@ static const s64 sc820cs_link_freq_menu[] = {
 	SC820CS_LINK_FREQ,
 };
 
-/* Bayer order at the un-flipped readout is BGGR (hardware-verified: the
- * yellow-object test reads yellow with this code).  A readout rotation
- * moves the CFA start, so the four flip combinations map as
- * BGGR -> GBRG (h) -> GRBG (v) -> RGGB (both); same mapping as imx219.
+/* Bayer order at the un-flipped readout is RGGB (2026-10-26 full-frame
+ * A/B: with the readout flipped and the ISP told SRGGB the user's photo
+ * rendered warm skin blue -- the R/B-swap signature, so the flipped
+ * truth is BGGR and the base is its 180-degree partner RGGB.  The
+ * earlier yellow-object reversal to BGGR was the timeline-confounded
+ * call, LESSONS #55; the original warm-light statistics had it right).
+ * A readout rotation moves the CFA start, so the four flip combinations
+ * map as RGGB -> GRBG (h) -> GBRG (v) -> BGGR (both).
  * Order: no flip, hflip, vflip, h+v flip. */
 static const u32 sc820cs_mbus_formats[] = {
-	MEDIA_BUS_FMT_SBGGR10_1X10,
-	MEDIA_BUS_FMT_SGBRG10_1X10,
-	MEDIA_BUS_FMT_SGRBG10_1X10,
 	MEDIA_BUS_FMT_SRGGB10_1X10,
+	MEDIA_BUS_FMT_SGRBG10_1X10,
+	MEDIA_BUS_FMT_SGBRG10_1X10,
+	MEDIA_BUS_FMT_SBGGR10_1X10,
 };
 
 static const char * const sc820cs_test_pattern_menu[] = {
@@ -394,15 +398,20 @@ static int sc820cs_set_ctrl(struct v4l2_ctrl *ctrl)
 		cci_write(sc820cs->regmap, SC820CS_REG_FLIP_MIRROR,
 			  val, &ret);
 		/*
-		 * Flipping the readout moves the CFA start pixel (BGGR base:
-		 * h->GBRG, v->GRBG, both->RGGB).  libcamera implements DT
+		 * Flipping the readout moves the CFA start pixel (RGGB base:
+		 * h->GRBG, v->GBRG, both->BGGR).  libcamera implements DT
 		 * rotation via these flips, so the stored format must follow
 		 * them -- a stale code demosaics with R and B swapped and
 		 * every warm colour turns blue.
 		 */
-		if (!ret)
-			format->code = sc820cs_get_format_code(sc820cs,
-							       format->code);
+		if (!ret) {
+			struct v4l2_mbus_framefmt *mutable_fmt =
+				v4l2_subdev_state_get_format(state, 0);
+
+			mutable_fmt->code =
+				sc820cs_get_format_code(sc820cs,
+							mutable_fmt->code);
+		}
 		break;
 	default:
 		dev_dbg(&client->dev, "ctrl 0x%x not handled\n", ctrl->id);
@@ -483,13 +492,14 @@ static int sc820cs_init_controls(struct sc820cs *sc820cs)
 
 	/*
 	 * Measured 2026-10-25 (frame correlation at both register states):
-	 * 0x00 -> 0x66 is a true 180-degree rotation of the readout, and the
-	 * 0x66 state is the one that comes out upside-down on this module —
-	 * so the un-flipped POR state is upright.  Default both flips OFF;
-	 * the rotated readout also moves the Bayer start.  Every colour
-	 * observation the user made (yellow->blue, blue-black) was under the
-	 * SBGGR report in the 0x66 state, so that state is really RGGB and
-	 * the phase at 0x00 is SBGGR.
+	 * 0x00 -> 0x66 is a true 180-degree rotation of the readout.
+	 * Default both flips OFF; the rotated readout also moves the Bayer
+	 * start, which the format table above follows.
+	 *
+	 * Phase history: the 2026-10-25 colour deductions made here
+	 * ("0x66 is really RGGB, 0x00 is SBGGR") were drawn through several
+	 * different reporting-code generations and are superseded by the
+	 * 2026-10-26 controlled A/B -- base is RGGB, see the format table.
 	 */
 	sc820cs->vflip = v4l2_ctrl_new_std(ctrl_hdlr, &sc820cs_ctrl_ops,
 					   V4L2_CID_VFLIP, 0, 1, 1, 0);
@@ -738,7 +748,7 @@ static int sc820cs_init_state(struct v4l2_subdev *sd,
 		.which = V4L2_SUBDEV_FORMAT_TRY,
 		.pad = 0,
 		.format = {
-			.code = MEDIA_BUS_FMT_SBGGR10_1X10,
+			.code = MEDIA_BUS_FMT_SRGGB10_1X10,
 			.width = supported_modes[0].width,
 			.height = supported_modes[0].height,
 		},
