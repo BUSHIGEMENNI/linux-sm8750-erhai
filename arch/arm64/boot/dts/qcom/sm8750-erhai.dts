@@ -2730,17 +2730,19 @@
 		reg = <0x10>;
 
 		/*
-		 * The sensor's 0x00 state already streams upright (verified
-		 * with the ceiling-lamp centroid + the register sweep that
-		 * decoded 0x3221 bit5=V-flip, bit2=H-mirror).  GNOME Snapshot
-		 * still shows it upside-down because it applies the customary
-		 * 180° correction to any camera declared FRONT (front modules
-		 * are usually mounted inverted).  Declare the camera EXTERNAL
-		 * so no front-facing correction is applied and the upright
-		 * frame passes through untouched.
+		 * 2026-10-26 A/B ground truth: the raw stream is upside-down.
+		 * libcamera-native consumers with rotation=0 (GNOME Snapshot)
+		 * save inverted photos, while the v4l2loopback path that adds
+		 * an explicit 180 (erhai-camfeed videoflip) reads upright in
+		 * Chrome.  The earlier "0x00 streams upright" claim was an
+		 * artifact of measuring through a flipping path.  rotation=180
+		 * makes libcamera report it so Snapshot/qcam straighten the
+		 * frame; erhai-camfeed keeps its own hardcoded 180 because
+		 * GStreamer libcamerasrc ignores the property.  Stay EXTERNAL:
+		 * front-correction heuristics would stack a second transform.
 		 */
 		orientation = <2>;
-		rotation = <0>;
+		rotation = <180>;
 
 		reset-gpios = <&tlmm 7 GPIO_ACTIVE_LOW>;
 
