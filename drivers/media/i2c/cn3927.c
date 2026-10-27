@@ -30,6 +30,10 @@
 
 #define CN3927_NAME			"cn3927"
 #define CN3927_MAX_FOCUS_POS		1023
+/* The official actuator lock sequence parks the DAC at 0x1F4 -- the module's
+ * calibrated optical-infinity position.  DAC values below it are beyond the
+ * lens travel; V4L2 focus 0 (= infinity) maps here. */
+#define CN3927_INFINITY_DAC		500
 #define CN3927_PARK_STEP		32
 #define CN3927_PARK_POSITION		32
 #define CN3927_MOVE_DELAY_US		1000
@@ -149,7 +153,7 @@ static int cn3927_set_ctrl(struct v4l2_ctrl *ctrl)
 		return 0;
 	}
 
-	ret = cn3927_set_focus(cn3927, ctrl->val);
+	ret = cn3927_set_focus(cn3927, max(ctrl->val, CN3927_INFINITY_DAC));
 	pm_runtime_put(cn3927->subdev.dev);
 	if (!ret)
 		cn3927->focus = ctrl->val;
@@ -242,7 +246,11 @@ static int cn3927_runtime_resume(struct device *dev)
 	if (ret)
 		goto disable_supplies;
 
-	for (focus = 0; focus < cn3927->focus; focus += CN3927_PARK_STEP) {
+	/* Come up through the calibrated infinity position before applying
+	 * any cached focus (official lock sequence ends at DAC 500). */
+	int target = max(cn3927->focus, CN3927_INFINITY_DAC);
+
+	for (focus = 0; focus <= target; focus += CN3927_PARK_STEP) {
 		ret = cn3927_set_focus(cn3927, focus);
 		if (ret)
 			goto disable_supplies;
