@@ -96,12 +96,22 @@ struct sc1320cs {
 	struct v4l2_subdev sd;
 	struct media_pad pad;
 	struct v4l2_ctrl_handler ctrls;
+
+	/* Cached AE control values.  s_stream rewrites the whole mode table
+	 * behind a soft reset (which parks the integration at 32 x VTS, a
+	 * full frame), so whatever the IPA last asked for is replayed after
+	 * every table write. */
+	u32 exposure;
+	u32 gain;
+	u32 vblank;
 };
 
 static inline struct sc1320cs *to_sc1320cs(struct v4l2_subdev *sd)
 {
 	return container_of(sd, struct sc1320cs, sd);
 }
+
+static int sc1320cs_apply_ctrls(struct sc1320cs *sensor);
 
 static int sc1320cs_power_on(struct device *dev)
 {
@@ -447,6 +457,10 @@ static int sc1320cs_s_stream(struct v4l2_subdev *sd, int enable)
 		goto err_put;
 	}
 
+	ret = sc1320cs_apply_ctrls(sensor);
+	if (ret)
+		goto err_put;
+
 	ret = cci_write(sensor->regmap, SC1320CS_REG_STREAM, 0x01, NULL);
 	if (ret)
 		goto err_put;
@@ -544,16 +558,62 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
  */
 
 /*
- * Exposure/gain/blanking controls are exposed with valid ranges (libcamera's
- * CameraSensor rejects any sensor missing V4L2_CID_{EXPOSURE,ANALOGUE_GAIN,
- * HBLANK,VBLANK}, so without them GNOME/pipewire find no camera). They are
- * accepted but not yet written to hardware — the sensor streams at its
- * power-on default AE. TODO: wire s_ctrl to SC1320CS exposure (0x3e00-02) /
- * gain (0x3e08-09) / VTS (0x320e-0f) for real auto-exposure.
+ * Push the cached AE control values into the sensor registers.
+ *
+ * Exposure: 0x3e00-02 is a 20-bit counter in 1/32-line steps -- both mode
+ * tables park it at exactly 32 x VTS (a full frame), which is the 10-25
+ * "power-on default AE" that blew every indoor shot wide open.  Gain
+ * encoding is unverified (0x3e08 range 0, 0x3e09 direct code, mirrors the
+ * sc820cs scheme); a wrong constant only moves the AEC's register working
+ * point, it cannot stop the loop from converging -- verify the reported
+ * shutter before trusting it as metadata (LESSONS #52).
  */
+static int sc1320cs_apply_ctrls(struct sc1320cs *sensor)
+{
+	u32 reg = min_t(u32, sensor->exposure * 32, 0xfffff);
+	u32 vts = SC1320CS_NATIVE_HEIGHT + sensor->vblank;
+	int ret = 0;
+
+	cci_write(sensor->regmap, CCI_REG8(0x3e00), (reg >> 16) & 0xff, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e01), (reg >> 8) & 0xff, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e02), reg & 0xff, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e08), 0x00, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e09), sensor->gain & 0xff, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x320e), (vts >> 8) & 0xff, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x320f), vts & 0xff, &ret);
+
+	return ret;
+}
+
 static int sc1320cs_s_ctrl(struct v4l2_ctrl *ctrl)
 {
-	return 0;
+	struct sc1320cs *sensor = container_of(ctrl->handler,
+					       struct sc1320cs, ctrls);
+	int ret;
+
+	switch (ctrl->id) {
+	case V4L2_CID_EXPOSURE:
+		sensor->exposure = ctrl->val;
+		break;
+	case V4L2_CID_ANALOGUE_GAIN:
+		sensor->gain = ctrl->val;
+		break;
+	case V4L2_CID_VBLANK:
+		sensor->vblank = ctrl->val;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	/* Live while powered; when suspended the cached values are replayed
+	 * by the next stream start (which also wipes the registers). */
+	if (pm_runtime_get_if_in_use(sensor->dev) == 0)
+		return 0;
+
+	ret = sc1320cs_apply_ctrls(sensor);
+
+	pm_runtime_put(sensor->dev);
+	return ret;
 }
 
 static const struct v4l2_ctrl_ops sc1320cs_ctrl_ops = {
@@ -651,6 +711,11 @@ static int sc1320cs_probe(struct i2c_client *client)
 		return -ENOMEM;
 
 	sensor->dev = dev;
+	/* Sane AE starting point; the mode table alone would stream at its
+	 * 32 x VTS full-frame integration and blow out indoors. */
+	sensor->exposure = SC1320CS_EXPOSURE_DEF;
+	sensor->gain = 0;
+	sensor->vblank = SC1320CS_VTS_DEF - SC1320CS_NATIVE_HEIGHT;
 
 	sensor->regmap = devm_cci_regmap_init_i2c(client, 16);
 	if (IS_ERR(sensor->regmap))
