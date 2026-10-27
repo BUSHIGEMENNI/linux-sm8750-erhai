@@ -404,10 +404,15 @@ static const struct cci_reg_sequence sc1320cs_mode_4160x3120[] = {
 	 * rear (location=back) GNOME Snapshot / aperture applies its OWN
 	 * horizontal mirror to BOTH the preview and the saved picture, so the
 	 * sensor mirror has to be ON to cancel it and land un-mirrored on
-	 * screen and on disk. (0x60 / mirror OFF leaves both mirrored.) A
-	 * readout rotation moves the CFA start, so both flips together shift
-	 * it by one pixel in each axis: a BGGR part then reads out RGGB, which
-	 * is the phase this driver declares.
+	 * screen and on disk. (0x60 / mirror OFF leaves both mirrored.)
+	 *
+	 * Both flips together move the readout phase by one pixel in each axis,
+	 * which swaps the two Bayer phases: a part whose own phase is X reads
+	 * out as the opposite phase.  This driver declares SBGGR (see
+	 * sc1320cs_get_fmt), settled on-device on 2026-10-27 by looking at the
+	 * captured colours rather than by reasoning about the flips; the vendor
+	 * tree carries no CFA statement at all, so nothing in the register
+	 * values can arbitrate it.
 	 */
 	{ CCI_REG8(0x3221), 0x66 },
 	{ CCI_REG8(0x5000), 0x1e },
@@ -512,6 +517,78 @@ static int sc1320cs_enum_frame_size(struct v4l2_subdev *sd,
 	return 0;
 }
 
+/*
+ * Crop targets.  There is one fixed readout and the vendor register table
+ * carries no array offset, so CROP, CROP_DEFAULT and CROP_BOUNDS all describe
+ * the whole active array.
+ *
+ * These must exist.  libcamera's CameraSensor::initProperties() reads
+ * CROP_BOUNDS as the pixel array size and CROP_DEFAULT as the active area;
+ * without them it logs "Unable to get rectangle 2 on pad 0/0" and leaves the
+ * geometry empty, which is what starved the soft IPA's AGC.  The sensor then
+ * streamed forever at its power-on exposure (0x18f half-lines) and every
+ * indoor frame came out dark without ever converging.
+ */
+static int sc1320cs_get_selection(struct v4l2_subdev *sd,
+				  struct v4l2_subdev_state *state,
+				  struct v4l2_subdev_selection *sel)
+{
+	switch (sel->target) {
+	case V4L2_SEL_TGT_CROP:
+	case V4L2_SEL_TGT_CROP_DEFAULT:
+	case V4L2_SEL_TGT_CROP_BOUNDS:
+	case V4L2_SEL_TGT_NATIVE_SIZE:
+		sel->r.left = 0;
+		sel->r.top = 0;
+		sel->r.width = SC1320CS_NATIVE_WIDTH;
+		sel->r.height = SC1320CS_NATIVE_HEIGHT;
+		return 0;
+	}
+
+	return -EINVAL;
+}
+
+static int sc1320cs_set_selection(struct v4l2_subdev *sd,
+				  struct v4l2_subdev_state *state,
+				  struct v4l2_subdev_selection *sel)
+{
+	if (sel->target != V4L2_SEL_TGT_CROP)
+		return -EINVAL;
+
+	/* Only the full array is readable; report back what is really read. */
+	sel->r.left = 0;
+	sel->r.top = 0;
+	sel->r.width = SC1320CS_NATIVE_WIDTH;
+	sel->r.height = SC1320CS_NATIVE_HEIGHT;
+
+	return 0;
+}
+
+static int sc1320cs_init_state(struct v4l2_subdev *sd,
+			       struct v4l2_subdev_state *state)
+{
+	struct v4l2_mbus_framefmt *fmt;
+	struct v4l2_rect *crop;
+
+	/* One fixed readout, so the state carries the same values get_fmt and
+	 * get_selection report; anything reading the state directly (rather
+	 * than through the pad ops) then sees a sane geometry instead of 0x0. */
+	fmt = v4l2_subdev_state_get_format(state, 0);
+	fmt->code = MEDIA_BUS_FMT_SBGGR10_1X10;
+	fmt->width = SC1320CS_NATIVE_WIDTH;
+	fmt->height = SC1320CS_NATIVE_HEIGHT;
+	fmt->field = V4L2_FIELD_NONE;
+	fmt->colorspace = V4L2_COLORSPACE_RAW;
+
+	crop = v4l2_subdev_state_get_crop(state, 0);
+	crop->left = 0;
+	crop->top = 0;
+	crop->width = SC1320CS_NATIVE_WIDTH;
+	crop->height = SC1320CS_NATIVE_HEIGHT;
+
+	return 0;
+}
+
 static const struct v4l2_subdev_video_ops sc1320cs_video_ops = {
 	.s_stream = sc1320cs_s_stream,
 };
@@ -521,6 +598,12 @@ static const struct v4l2_subdev_pad_ops sc1320cs_pad_ops = {
 	.enum_frame_size = sc1320cs_enum_frame_size,
 	.get_fmt = sc1320cs_get_fmt,
 	.set_fmt = sc1320cs_get_fmt,
+	.get_selection = sc1320cs_get_selection,
+	.set_selection = sc1320cs_set_selection,
+};
+
+static const struct v4l2_subdev_internal_ops sc1320cs_internal_ops = {
+	.init_state = sc1320cs_init_state,
 };
 
 static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
@@ -770,13 +853,25 @@ static int sc1320cs_probe(struct i2c_client *client)
 		goto err_ctrls;
 
 	/*
+	 * Allocate the subdev state so pad-level ioctls work at all.  Without
+	 * it every VIDIOC_SUBDEV_G_SELECTION with which=TRY is rejected by
+	 * check_state(), and libcamera only ever asks with TRY for the geometry
+	 * it needs before streaming.
+	 */
+	sensor->sd.state_lock = sensor->ctrls.lock;
+	sensor->sd.internal_ops = &sc1320cs_internal_ops;
+	ret = v4l2_subdev_init_finalize(&sensor->sd);
+	if (ret)
+		goto err_media;
+
+	/*
 	 * Register as an image sensor so the CAMSS receiver binds us via our
 	 * MIPI CSI-2 output endpoint (DT: sc1320cs_ep -> camss CSIPHY4). The
 	 * lane/link config itself is parsed on the CAMSS port side.
 	 */
 	ret = v4l2_async_register_subdev_sensor(&sensor->sd);
 	if (ret)
-		goto err_media;
+		goto err_cleanup;
 
 	/* keep powered until runtime PM is wired for streaming */
 	pm_runtime_set_active(dev);
@@ -785,6 +880,8 @@ static int sc1320cs_probe(struct i2c_client *client)
 
 	return 0;
 
+err_cleanup:
+	v4l2_subdev_cleanup(&sensor->sd);
 err_media:
 	media_entity_cleanup(&sensor->sd.entity);
 err_ctrls:
@@ -800,8 +897,9 @@ static void sc1320cs_remove(struct i2c_client *client)
 	struct sc1320cs *sensor = to_sc1320cs(sd);
 
 	v4l2_async_unregister_subdev(sd);
-	v4l2_ctrl_handler_free(&sensor->ctrls);
+	v4l2_subdev_cleanup(sd);
 	media_entity_cleanup(&sd->entity);
+	v4l2_ctrl_handler_free(&sensor->ctrls);
 
 	pm_runtime_disable(sensor->dev);
 	if (!pm_runtime_status_suspended(sensor->dev))
