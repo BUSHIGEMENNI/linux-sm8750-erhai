@@ -98,9 +98,9 @@ struct sc1320cs {
 	struct v4l2_ctrl_handler ctrls;
 
 	/* Cached AE control values.  s_stream rewrites the whole mode table
-	 * behind a soft reset (which parks the integration at 32 x VTS, a
-	 * full frame), so whatever the IPA last asked for is replayed after
-	 * every table write. */
+	 * behind a soft reset (which parks the integration at a full frame,
+	 * 0x18F9 half-lines), so whatever the IPA last asked for is replayed
+	 * after every table write. */
 	u32 exposure;
 	u32 gain;
 	u32 vblank;
@@ -560,25 +560,30 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
 /*
  * Push the cached AE control values into the sensor registers.
  *
- * Exposure: 0x3e00-02 is a 20-bit counter in 1/32-line steps -- both mode
- * tables park it at exactly 32 x VTS (a full frame), which is the 10-25
- * "power-on default AE" that blew every indoor shot wide open.  Gain
- * encoding is unverified (0x3e08 range 0, 0x3e09 direct code, mirrors the
- * sc820cs scheme); a wrong constant only moves the AEC's register working
- * point, it cannot stop the loop from converging -- verify the reported
- * shutter before trusting it as metadata (LESSONS #52).
+ * Exposure: 0x3e00[3:0]:0x3e01[7:0]:0x3e02[7:4] form a 20-bit counter in
+ * HALF-LINE units -- the OnePlus OSS initsettings park it at 0x18F9 = 3196.5
+ * lines for a 3200-line VTS, i.e. a full frame, which is the "power-on AE"
+ * that blew every indoor shot while the stub s_ctrl ignored the controls.
+ * Write lines * 2; the low nibble of 0x3e02 stays zero.
+ *
+ * Gain: 0x3e09 is the coarse analogue stage (0x00=1x, 0x08=2x, 0x09=4x,
+ * 0x0b=8x, 0x0f=16x per the OnePlus OSS sensor library); 0x3e07 is the
+ * digital fine gain with 128 = 1.0x.  The V4L2 range 0..255 is mapped
+ * linearly onto the four coarse stages.
  */
 static int sc1320cs_apply_ctrls(struct sc1320cs *sensor)
 {
-	u32 reg = min_t(u32, sensor->exposure * 32, 0xfffff);
+	static const u8 again_coarse[4] = { 0x00, 0x08, 0x09, 0x0b };
+	u32 reg = min_t(u32, sensor->exposure * 2, 0xffff0);
 	u32 vts = SC1320CS_NATIVE_HEIGHT + sensor->vblank;
+	u32 g = min_t(u32, sensor->gain / 64, 3);
 	int ret = 0;
 
-	cci_write(sensor->regmap, CCI_REG8(0x3e00), (reg >> 16) & 0xff, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e00), (reg >> 16) & 0x0f, &ret);
 	cci_write(sensor->regmap, CCI_REG8(0x3e01), (reg >> 8) & 0xff, &ret);
-	cci_write(sensor->regmap, CCI_REG8(0x3e02), reg & 0xff, &ret);
-	cci_write(sensor->regmap, CCI_REG8(0x3e08), 0x00, &ret);
-	cci_write(sensor->regmap, CCI_REG8(0x3e09), sensor->gain & 0xff, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e02), reg & 0xf0, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e09), again_coarse[g], &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e07), 128, &ret);
 	cci_write(sensor->regmap, CCI_REG8(0x320e), (vts >> 8) & 0xff, &ret);
 	cci_write(sensor->regmap, CCI_REG8(0x320f), vts & 0xff, &ret);
 
