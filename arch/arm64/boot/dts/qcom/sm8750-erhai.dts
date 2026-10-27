@@ -1082,11 +1082,15 @@
  * Both are SC8547A 2:1 pumps with an integrated VOOC serial PHY, driven
  * AP-side by drivers/power/supply/sc8547a.c (CONFIG_CHARGER_SC8547A);
  * the PPS host engine is erhai_pps.c (CONFIG_CHARGER_ERHAI_PPS).
- * Stock runs both buses at 400 kHz (dtbo fragment@76 qcom,clk-freq-out);
- * 100 kHz default kept as on the validated 7.3 tree - flip to 400 kHz by
- * adding clock-frequency if the pump trace shows slow I2C.
+ * Stock runs both buses at 400 kHz (dtbo fragment@76 qcom,clk-freq-out) and
+ * &i2c_hub_4 below already drives 400 kHz on this board, so the pattern is
+ * proven here.  Measured on 2026-10-27 at the 100 kHz default: ~1 ms per
+ * single-byte i2cget, with no i2c errors in dmesg.  That is not a fault, but
+ * the VOOC serial path answers an adapter frame from an IRQ and the frame
+ * window is tight, so the stock clock is the safer setting.
  */
 &i2c_hub_8 {
+	clock-frequency = <400000>;
 	status = "okay";
 
 	sc8547a_master: charge-pump@6f {
@@ -1103,6 +1107,7 @@
 };
 
 &i2c_hub_2 {
+	clock-frequency = <400000>;
 	status = "okay";
 
 	sc8547a_slave: charge-pump@6f {
