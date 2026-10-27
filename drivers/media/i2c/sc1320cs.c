@@ -643,28 +643,42 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
 /*
  * Push the cached AE control values into the sensor registers.
  *
- * Exposure: 0x3e00[3:0]:0x3e01[7:0]:0x3e02[7:4] form a 20-bit counter in
- * HALF-LINE units -- the OnePlus OSS initsettings park it at 0x18F9 = 3196.5
- * lines for a 3200-line VTS, i.e. a full frame, which is the "power-on AE"
- * that blew every indoor shot while the stub s_ctrl ignored the controls.
- * Write lines * 2; the low nibble of 0x3e02 stays zero.
+ * Exposure is a 20-bit counter in HALF-LINE units spread over
+ *   0x3e00[19:12] : 0x3e01[11:4] : 0x3e02[7:4]
+ * and it is written as lines * 2 (the low nibble of 0x3e02 stays zero).
+ *
+ * The earlier version of this function shifted by 16 and 8 instead of 12 and
+ * 4, which made every request land at 1/16 of its value.  Two independent
+ * vendor tables arbitrate the layout: the second half of our own mode table
+ * writes 0x03/0x1f/0xe0, and the OnePlus OSS FTM table for this sensor
+ * (camera_3107_c658) writes 0x01/0x8f/0x90.  Decoded with [19:12]/[11:4]/[7:4]
+ * they are 6399 lines (a full frame) and 3196.5 lines (= 0x18F9, exactly the
+ * value this driver's comment has always claimed); decoded with the wrong
+ * shifts they are 102384 and 51144 lines, i.e. 16x past the end of the frame.
+ *
+ * Consequence of the bug: asking for 399 lines gave the sensor 24, and the
+ * AGC's whole 1..6396 range covered 24..399 lines -- 6% of a frame at most.
+ * That is why the picture stayed dark no matter what the IPA did.
  *
  * Gain: 0x3e09 is the coarse analogue stage (0x00=1x, 0x08=2x, 0x09=4x,
- * 0x0b=8x, 0x0f=16x per the OnePlus OSS sensor library); 0x3e07 is the
- * digital fine gain with 128 = 1.0x.  The V4L2 range 0..255 is mapped
- * linearly onto the four coarse stages.
+ * 0x0b=8x, 0x0f=16x); 0x3e07 is the fine stage with 128 = 1.0x of the
+ * selected coarse range.  The four coarse values were measured to respond on
+ * hardware (a gain sweep moved the frame peak 76 -> 165); 0x0f was left out
+ * of the table before, so 16x was unreachable, and it is included now.
  */
 static int sc1320cs_apply_ctrls(struct sc1320cs *sensor)
 {
-	static const u8 again_coarse[4] = { 0x00, 0x08, 0x09, 0x0b };
-	u32 reg = min_t(u32, sensor->exposure * 2, 0xffff0);
+	static const u8 again_coarse[] = { 0x00, 0x08, 0x09, 0x0b, 0x0f };
+	u32 enc = min_t(u32, sensor->exposure * 2, 0xfffff);
 	u32 vts = SC1320CS_NATIVE_HEIGHT + sensor->vblank;
-	u32 g = min_t(u32, sensor->gain / 64, 3);
+	u32 g = min_t(u32, sensor->gain * ARRAY_SIZE(again_coarse) /
+			  (SC1320CS_AGAIN_MAX + 1),
+		    ARRAY_SIZE(again_coarse) - 1);
 	int ret = 0;
 
-	cci_write(sensor->regmap, CCI_REG8(0x3e00), (reg >> 16) & 0x0f, &ret);
-	cci_write(sensor->regmap, CCI_REG8(0x3e01), (reg >> 8) & 0xff, &ret);
-	cci_write(sensor->regmap, CCI_REG8(0x3e02), reg & 0xf0, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e00), (enc >> 12) & 0xff, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e01), (enc >> 4) & 0xff, &ret);
+	cci_write(sensor->regmap, CCI_REG8(0x3e02), (enc & 0x0f) << 4, &ret);
 	cci_write(sensor->regmap, CCI_REG8(0x3e09), again_coarse[g], &ret);
 	cci_write(sensor->regmap, CCI_REG8(0x3e07), 128, &ret);
 	cci_write(sensor->regmap, CCI_REG8(0x320e), (vts >> 8) & 0xff, &ret);
