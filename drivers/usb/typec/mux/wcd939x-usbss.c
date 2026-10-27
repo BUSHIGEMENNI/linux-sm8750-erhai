@@ -624,6 +624,21 @@ static int wcd939x_usbss_mux_set(struct typec_mux_dev *mux,
 		ret = wcd939x_usbss_set(usbss);
 	}
 
+	/*
+	 * The block above is the only other place dp_active is written, and it
+	 * runs only on a mode change. A DP sink that withdraws alt-mode while
+	 * the cable stays put leaves the mode identical and the alt list empty,
+	 * so dp_active would latch at 1 forever and every later fast-charge
+	 * request gets -EBUSY. No alt mode means the mux state no longer claims
+	 * DP, so drop the flag — clearing only, never setting, keeps this from
+	 * ever granting the crossbar while DisplayPort is really up.
+	 */
+	if (!state->alt && usbss->dp_active) {
+		usbss->dp_active = false;
+		dev_info(&usbss->client->dev,
+			 "erhai usbss: alt-mode gone, dp_active released\n");
+	}
+
 	mutex_unlock(&usbss->lock);
 
 	if (ret)
