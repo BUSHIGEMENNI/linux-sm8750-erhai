@@ -626,7 +626,18 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
  * bound is whatever the height leaves, not the register's own 0xffff. */
 #define SC1320CS_VBLANK_MAX	(0xffff - SC1320CS_NATIVE_HEIGHT)
 #define SC1320CS_EXPOSURE_MAX	(SC1320CS_VTS_DEF - 8)
-#define SC1320CS_EXPOSURE_DEF	0x18f
+/*
+ * The vendor init writes 0x3e00/0x3e01/0x3e02 = 0x01/0x8f/0x90, which decodes
+ * to 0x18F9 half-lines = 3196 lines -- half of a 6404-line frame, the value
+ * this file's own comment has always named.  It used to be written 0x18f,
+ * which is that number with the last hex digit dropped: 399 lines, 6% of a
+ * frame.  That is the exposure the sensor sat at whenever nothing drove the
+ * control (any RAW-only capture: the software ISP is not configured then, so
+ * the IPA's AGC never runs), and it is far too short for an indoor scene --
+ * a 6404-line frame takes ~80 ms on this mode, so 399 lines integrates for
+ * only ~5 ms.
+ */
+#define SC1320CS_EXPOSURE_DEF	3196
 #define SC1320CS_AGAIN_MAX	255
 
 /* Pixel rate: two methods disagree by ~2x and neither is verified on the
@@ -813,8 +824,11 @@ static int sc1320cs_probe(struct i2c_client *client)
 		return -ENOMEM;
 
 	sensor->dev = dev;
-	/* Sane AE starting point; the mode table alone would stream at its
-	 * 32 x VTS full-frame integration and blow out indoors. */
+	/* The mode table itself leaves the integration at whatever the last
+	 * entry of it wrote; park both the cache and the control at the value
+	 * the vendor init table uses (half a frame) so a RAW-only capture --
+	 * where the IPA never runs and nothing else sets exposure -- is not
+	 * pitch dark.  See SC1320CS_EXPOSURE_DEF. */
 	sensor->exposure = SC1320CS_EXPOSURE_DEF;
 	sensor->gain = 0;
 	sensor->vblank = SC1320CS_VTS_DEF - SC1320CS_NATIVE_HEIGHT;
