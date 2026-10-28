@@ -2395,12 +2395,7 @@
 				clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK1_CLK>;
 				clock-names = "cam_clk";
 				assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK1_CLK>;
-				/* 24 MHz = the SmartSens reference design input.  At
-				 * 19.2 MHz every sensor PLL scales x0.8 (LESSONS
-				 * #93): the rear readout ran 384 MHz instead of its
-				 * declared 480 (fps 24.3 vs 30), while the CSIPHY is
-				 * tuned for the 1200 Mbps that only 480 produces. */
-				assigned-clock-rates = <24000000>;
+				assigned-clock-rates = <19200000>;
 
 				pinctrl-names = "default";
 				pinctrl-0 = <&cam_rear_mclk_default>;
@@ -2787,8 +2782,8 @@
 		 * rejects 24 MHz ("xclk frequency not supported") and a failed
 		 * front probe leaves the camss async graph incomplete, which
 		 * takes the WORKING rear camera down with it.  Raising the
-		 * front needs the xclk table plus a link-freq re-derivation
-		 * (132 MHz pixel -> 330 Mbps/lane), a batch of its own. */
+		 * front speed happens in the sensor PLL instead (see the
+		 * caihong table tail), not via the board clock tree. */
 		assigned-clock-rates = <19200000>;
 
 		pinctrl-0 = <&cam_mclk4_default>;
@@ -2812,7 +2807,9 @@
 				sc820cs_out: endpoint {
 					remote-endpoint = <&camss_csiphy5>;
 					data-lanes = <0 1 2 3>;
-					link-frequencies = /bits/ 64 <368000000>;
+					/* 264 MHz DDR = 528 Mbps/lane: both front PLLs close at divider 2
+				 * (see drivers/media/i2c/sc820cs-caihong-regs.h). */
+				link-frequencies = /bits/ 64 <264000000>;
 				};
 			};
 		};

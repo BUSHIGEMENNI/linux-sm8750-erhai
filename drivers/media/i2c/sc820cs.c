@@ -146,8 +146,13 @@ MODULE_PARM_DESC(reg_3221_override, "raw value forced into 0x3221 at stream setu
  * stays at the caihong-measured 3888 * 2500 * 24 = 233.28 MHz.
  * 0x301f = 0x0e in the vendor table is the 4-lane lane-mode value. */
 #define SC820CS_NUM_DATA_LANES		4
-#define SC820CS_LINK_FREQ		368000000ULL
-#define SC820CS_PIXEL_RATE		233280000ULL
+/* Both sensor PLLs close at divider 2 (caihong table tail, 2026-10-29):
+ * pixel clock 19.2 MHz * 22 / 2 = 211.2 MHz, RAW10 over 4 lanes =>
+ * 528 Mbps/lane => 264 MHz DDR link frequency.  The old 368 MHz figure
+ * was Android's configured value for a 294.4 MHz pixel clock that this
+ * board's 19.2 MHz input never produced (measured 105.6 MHz at /4). */
+#define SC820CS_LINK_FREQ		264000000ULL
+#define SC820CS_PIXEL_RATE		211200000ULL
 
 #define SC820CS_NATIVE_WIDTH		3264U
 #define SC820CS_NATIVE_HEIGHT		2448U
