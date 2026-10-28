@@ -138,4 +138,15 @@ config EEPROM_M24LR
 	  To compile this driver as a module, choose M here: the
 	  module will be called m24lr.
 
+config EEPROM_ERHAI_CAM
+	tristate "OPLUS erhai rear camera module EEPROM"
+	depends on I2C && OF
+	select NVMEM
+	help
+	  Calibration EEPROM on the erhai rear camera module (CCI bus,
+	  16-bit addressing, 8-byte chunked reads -- the CCI adapter rejects
+	  longer messages).  Exposed as an nvmem device.
+
+	  This driver is erhai-specific; say M to build it as a module.
+
 endmenu
