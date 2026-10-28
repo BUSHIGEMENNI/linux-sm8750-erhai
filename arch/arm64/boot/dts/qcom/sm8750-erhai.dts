@@ -1895,7 +1895,12 @@
 				clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK1_CLK>;
 				clock-names = "cam_clk";
 				assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK1_CLK>;
-				assigned-clock-rates = <19200000>;
+				/* 24 MHz = the SmartSens reference design input.  At
+				 * 19.2 MHz every sensor PLL scales x0.8 (LESSONS
+				 * #93): the rear readout ran 384 MHz instead of its
+				 * declared 480 (fps 24.3 vs 30), while the CSIPHY is
+				 * tuned for the 1200 Mbps that only 480 produces. */
+				assigned-clock-rates = <24000000>;
 
 				pinctrl-names = "default";
 				pinctrl-0 = <&cam_rear_mclk_default>;
@@ -2293,7 +2298,8 @@
 
 		clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK>;
 		assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK_SRC>;
-		assigned-clock-rates = <19200000>;
+		/* Same reference-design argument as the rear sensor's MCLK1. */
+		assigned-clock-rates = <24000000>;
 
 		pinctrl-0 = <&cam_mclk4_default>;
 		pinctrl-names = "default";
