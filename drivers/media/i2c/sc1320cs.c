@@ -420,8 +420,8 @@ static const struct cci_reg_sequence sc1320cs_mode_4160x3120[] = {
 	{ CCI_REG8(0x5901), 0x00 },
 	{ CCI_REG8(0x301f), 0x00 },
 	{ CCI_REG8(0x326d), 0x00 },
-	{ CCI_REG8(0x320e), 0x19 },
-	{ CCI_REG8(0x320f), 0x04 },
+	{ CCI_REG8(0x320e), 0x0c },
+	{ CCI_REG8(0x320f), 0x80 },
 	{ CCI_REG8(0x3e20), 0x00 },
 	{ CCI_REG8(0x3e00), 0x03 },
 	{ CCI_REG8(0x3e01), 0x1f },
@@ -619,7 +619,11 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
  * length and must not be read as one.  The control is therefore exposed
  * READ_ONLY with min == max rather than being "fixed" to HTS - width,
  * which would fabricate a number; the register's unit is unconfirmed. */
-#define SC1320CS_VTS_DEF	6404
+/* Vendor FTM table and the first half of the traced mode table both program
+ * VTS 0x0c80 = 3200; only the mode table's final write carries 0x1904 =
+ * 6404, which halves the frame rate (measured 12.0 fps vs the vendor's
+ * 30 fps target).  Run the 3200-line frame. */
+#define SC1320CS_VTS_DEF	3200
 #define SC1320CS_HBLANK		1250
 #define SC1320CS_VBLANK_MIN	32
 /* height + vblank must stay inside the 16-bit VTS register, so the upper
@@ -628,16 +632,16 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
 #define SC1320CS_EXPOSURE_MAX	(SC1320CS_VTS_DEF - 8)
 /*
  * The vendor init writes 0x3e00/0x3e01/0x3e02 = 0x01/0x8f/0x90, which decodes
- * to 0x18F9 half-lines = 3196 lines -- half of a 6404-line frame, the value
- * this file's own comment has always named.  It used to be written 0x18f,
+ * to 0x18F9 half-lines = 3196 lines -- the vendor parking value (full frame
+ * of the vendor's 3200-line VTS).  It used to be written 0x18f,
  * which is that number with the last hex digit dropped: 399 lines, 6% of a
  * frame.  That is the exposure the sensor sat at whenever nothing drove the
  * control (any RAW-only capture: the software ISP is not configured then, so
  * the IPA's AGC never runs), and it is far too short for an indoor scene --
- * a 6404-line frame takes ~80 ms on this mode, so 399 lines integrates for
+ * a 3200-line frame takes ~42 ms on this mode, so 399 lines integrates for
  * only ~5 ms.
  */
-#define SC1320CS_EXPOSURE_DEF	3196
+#define SC1320CS_EXPOSURE_DEF	1596
 #define SC1320CS_AGAIN_MAX	255
 
 /* Pixel rate: two methods disagree by ~2x and neither is verified on the
