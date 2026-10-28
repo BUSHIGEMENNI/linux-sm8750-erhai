@@ -222,7 +222,7 @@ static int sc1320cs_detect(struct sc1320cs *sensor)
  * Self-check against the crop registers this programs: 0x3208/09 = 0x1040 =
  * 4160 and 0x320a/0b = 0x0c30 = 3120 = the advertised output size.
  */
-static const struct cci_reg_sequence sc1320cs_mode_4160x3120[] = {
+static const struct cci_reg_sequence sc1320cs_mode_4160x3120[] = {  /* TEMP EXPERIMENT: blob m0 table, do not keep */
 	{ CCI_REG8(0x36e9), 0x80 },
 	{ CCI_REG8(0x37f9), 0x80 },
 	{ CCI_REG8(0x36ea), 0x13 },
