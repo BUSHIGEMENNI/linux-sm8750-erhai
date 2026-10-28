@@ -1877,6 +1877,17 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
+			/* Rear camera module calibration EEPROM.  Populated
+			 * through ~0xb28 (module id "001QC..." at 0x08 plus
+			 * calibration tables); the rest of the 4 KiB window
+			 * reads 0xff.  The CCI adapter caps messages at 8
+			 * data bytes, so the driver chunks every access. */
+			camera_eeprom@50 {
+				compatible = "oplus,erhai-cam-eeprom";
+				reg = <0x50>;
+				size = <4096>;
+			};
+
 			sc1320cs: camera-sensor@36 {
 				compatible = "smartsens,sc1320cs";
 				reg = <0x36>;
