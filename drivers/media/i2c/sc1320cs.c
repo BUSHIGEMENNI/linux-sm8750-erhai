@@ -104,17 +104,6 @@ struct sc1320cs {
 	u32 exposure;
 	u32 gain;
 	u32 vblank;
-
-	/* Readout selected by set_fmt, consumed by s_stream.  Writes happen
-	 * under ctrls.lock (the subdev state_lock). */
-	const struct sc1320cs_mode *mode;
-};
-
-struct sc1320cs_mode {
-	u32 width;
-	u32 height;
-	const struct cci_reg_sequence *regs;
-	unsigned int num_regs;
 };
 
 static inline struct sc1320cs *to_sc1320cs(struct v4l2_subdev *sd)
@@ -444,610 +433,6 @@ static const struct cci_reg_sequence sc1320cs_mode_4160x3120[] = {
 	{ CCI_REG8(0x391f), 0x41 },
 };
 
-/*
- * Modes 1..3 below are the official camx init tables recovered from
- * com.qti.sensormodule.erhaimain.bin (Parameter Parser V5.5.1 blob, decoded
- * 2026-10-28 -- format notes in /tmp/erhai-odm/FORMAT.md).  Each table is the
- * common init plus the resolution-specific override block ([M] markers),
- * written in order after a soft reset; last write wins.  All four rear modes
- * share HTS 1250 / VTS 3200, so AE/vblank ranges do not move between modes.
- * Mode 0 above stays the FTM-derived table this driver was brought up on.
- */
-
-/* sc1320cs_mode_2104x1560 -- rear 2x2 binning 1:1 (2104x1560)
- * Order = blob serialization order (common init first, mode override last-write-wins).
- * [M] = resolution-specific register (mode block)
- * DIFF = differs from FTM full-res table camera_3107_c658
- */
-static const struct cci_reg_sequence sc1320cs_mode_2104x1560[] = {
-	{ CCI_REG8(0x301f), 0x00 },	/* DIFF vs FTM 0x1b */
-	{ CCI_REG8(0x301f), 0x00 },	/* DIFF vs FTM 0x1b */
-	{ CCI_REG8(0x36e9), 0x80 },
-	{ CCI_REG8(0x37f9), 0x80 },
-	{ CCI_REG8(0x36ea), 0x13 },
-	{ CCI_REG8(0x36eb), 0x0c },
-	{ CCI_REG8(0x36ec), 0x4b },
-	{ CCI_REG8(0x36ed), 0x18 },
-	{ CCI_REG8(0x36e9), 0x23 },	/* DIFF vs FTM 0x80 */
-	{ CCI_REG8(0x37f9), 0x24 },
-	{ CCI_REG8(0x301f), 0x31 },	/* DIFF vs FTM 0x1b */
-	{ CCI_REG8(0x320c), 0x04 },
-	{ CCI_REG8(0x320d), 0xe2 },
-	{ CCI_REG8(0x320e), 0x0c },
-	{ CCI_REG8(0x320f), 0x80 },
-	{ CCI_REG8(0x3279), 0x10 },
-	{ CCI_REG8(0x3301), 0x07 },
-	{ CCI_REG8(0x3302), 0x18 },
-	{ CCI_REG8(0x3304), 0x38 },
-	{ CCI_REG8(0x3306), 0x58 },
-	{ CCI_REG8(0x3308), 0x0c },
-	{ CCI_REG8(0x3309), 0x80 },
-	{ CCI_REG8(0x330b), 0xb8 },
-	{ CCI_REG8(0x330d), 0x10 },
-	{ CCI_REG8(0x330e), 0x2b },
-	{ CCI_REG8(0x3314), 0x15 },
-	{ CCI_REG8(0x331c), 0x04 },
-	{ CCI_REG8(0x331e), 0x29 },
-	{ CCI_REG8(0x331f), 0x71 },
-	{ CCI_REG8(0x3320), 0x08 },
-	{ CCI_REG8(0x3323), 0x04 },
-	{ CCI_REG8(0x3333), 0x10 },
-	{ CCI_REG8(0x3334), 0x40 },
-	{ CCI_REG8(0x3351), 0x06 },
-	{ CCI_REG8(0x335d), 0x60 },
-	{ CCI_REG8(0x3364), 0x56 },
-	{ CCI_REG8(0x337f), 0x13 },
-	{ CCI_REG8(0x3390), 0x09 },
-	{ CCI_REG8(0x3391), 0x0f },
-	{ CCI_REG8(0x3392), 0x1f },
-	{ CCI_REG8(0x3393), 0x10 },
-	{ CCI_REG8(0x3394), 0x1c },
-	{ CCI_REG8(0x3395), 0x20 },
-	{ CCI_REG8(0x33ac), 0x0a },
-	{ CCI_REG8(0x33ad), 0x14 },
-	{ CCI_REG8(0x33ae), 0x14 },
-	{ CCI_REG8(0x33af), 0x60 },
-	{ CCI_REG8(0x33b0), 0x0f },
-	{ CCI_REG8(0x33b2), 0x50 },
-	{ CCI_REG8(0x33b3), 0x28 },
-	{ CCI_REG8(0x349f), 0x1e },
-	{ CCI_REG8(0x34a6), 0x08 },
-	{ CCI_REG8(0x34a7), 0x09 },
-	{ CCI_REG8(0x34a8), 0x18 },
-	{ CCI_REG8(0x34a9), 0x18 },
-	{ CCI_REG8(0x34f8), 0x0f },
-	{ CCI_REG8(0x34f9), 0x18 },
-	{ CCI_REG8(0x3630), 0xc6 },	/* DIFF vs FTM 0xc8 */
-	{ CCI_REG8(0x3637), 0x47 },
-	{ CCI_REG8(0x363c), 0x8d },
-	{ CCI_REG8(0x3650), 0x21 },
-	{ CCI_REG8(0x3651), 0x9f },
-	{ CCI_REG8(0x3670), 0x0c },
-	{ CCI_REG8(0x367b), 0x56 },
-	{ CCI_REG8(0x367c), 0x67 },
-	{ CCI_REG8(0x367d), 0x67 },
-	{ CCI_REG8(0x367e), 0x08 },
-	{ CCI_REG8(0x367f), 0x0f },
-	{ CCI_REG8(0x3690), 0x84 },
-	{ CCI_REG8(0x3691), 0x87 },
-	{ CCI_REG8(0x3692), 0x8e },
-	{ CCI_REG8(0x3693), 0x9b },
-	{ CCI_REG8(0x3694), 0x09 },
-	{ CCI_REG8(0x3695), 0x0b },
-	{ CCI_REG8(0x3696), 0x0f },
-	{ CCI_REG8(0x3697), 0x8b },
-	{ CCI_REG8(0x3698), 0x8d },
-	{ CCI_REG8(0x3699), 0x8d },
-	{ CCI_REG8(0x369a), 0x08 },
-	{ CCI_REG8(0x369b), 0x0f },
-	{ CCI_REG8(0x370f), 0x01 },
-	{ CCI_REG8(0x3724), 0x41 },
-	{ CCI_REG8(0x3771), 0x03 },
-	{ CCI_REG8(0x3772), 0x03 },
-	{ CCI_REG8(0x3773), 0x63 },
-	{ CCI_REG8(0x377a), 0x08 },
-	{ CCI_REG8(0x377b), 0x0f },
-	{ CCI_REG8(0x3900), 0x0d },	/* DIFF vs FTM 0x1d */
-	{ CCI_REG8(0x3903), 0x20 },
-	{ CCI_REG8(0x3905), 0x0c },
-	{ CCI_REG8(0x3908), 0x40 },
-	{ CCI_REG8(0x391a), 0x30 },	/* DIFF vs FTM 0x1f */
-	{ CCI_REG8(0x391b), 0x21 },	/* DIFF vs FTM 0x16 */
-	{ CCI_REG8(0x391c), 0x13 },	/* DIFF vs FTM 0x0a */
-	{ CCI_REG8(0x391d), 0x00 },	/* DIFF vs FTM 0x05 */
-	{ CCI_REG8(0x391f), 0x41 },
-	{ CCI_REG8(0x3926), 0xe0 },
-	{ CCI_REG8(0x393f), 0x80 },
-	{ CCI_REG8(0x3940), 0x00 },
-	{ CCI_REG8(0x3941), 0x00 },
-	{ CCI_REG8(0x3942), 0x00 },
-	{ CCI_REG8(0x3943), 0x7c },
-	{ CCI_REG8(0x3944), 0x79 },
-	{ CCI_REG8(0x3945), 0x7d },
-	{ CCI_REG8(0x3946), 0x7d },
-	{ CCI_REG8(0x39dd), 0x00 },	/* DIFF vs FTM 0x02 */
-	{ CCI_REG8(0x39de), 0x04 },
-	{ CCI_REG8(0x39e7), 0x04 },	/* DIFF vs FTM 0x08 */
-	{ CCI_REG8(0x39e8), 0x03 },	/* DIFF vs FTM 0x80 */
-	{ CCI_REG8(0x39e9), 0x80 },
-	{ CCI_REG8(0x3e00), 0x01 },
-	{ CCI_REG8(0x3e01), 0x8f },
-	{ CCI_REG8(0x3e02), 0x90 },
-	{ CCI_REG8(0x3f08), 0x0a },
-	{ CCI_REG8(0x4401), 0x13 },
-	{ CCI_REG8(0x4402), 0x03 },
-	{ CCI_REG8(0x4403), 0x0c },
-	{ CCI_REG8(0x4404), 0x24 },
-	{ CCI_REG8(0x4405), 0x2f },
-	{ CCI_REG8(0x440c), 0x3c },
-	{ CCI_REG8(0x440d), 0x3c },
-	{ CCI_REG8(0x440e), 0x2d },
-	{ CCI_REG8(0x440f), 0x4b },
-	{ CCI_REG8(0x4413), 0x01 },
-	{ CCI_REG8(0x441b), 0x18 },
-	{ CCI_REG8(0x4509), 0x18 },
-	{ CCI_REG8(0x450d), 0x13 },
-	{ CCI_REG8(0x4800), 0x24 },
-	{ CCI_REG8(0x4837), 0x17 },	/* DIFF vs FTM 0x1a */
-	{ CCI_REG8(0x5000), 0x5e },	/* M, DIFF vs FTM 0x1e */
-	{ CCI_REG8(0x5002), 0x00 },
-	{ CCI_REG8(0x5015), 0x41 },
-	{ CCI_REG8(0x550e), 0x00 },
-	{ CCI_REG8(0x550f), 0x7a },
-	{ CCI_REG8(0x5780), 0x76 },
-	{ CCI_REG8(0x5784), 0x08 },
-	{ CCI_REG8(0x5787), 0x0a },
-	{ CCI_REG8(0x5788), 0x0a },
-	{ CCI_REG8(0x5789), 0x0a },
-	{ CCI_REG8(0x578a), 0x0a },
-	{ CCI_REG8(0x578b), 0x0a },
-	{ CCI_REG8(0x578c), 0x0a },
-	{ CCI_REG8(0x578d), 0x40 },
-	{ CCI_REG8(0x5790), 0x08 },
-	{ CCI_REG8(0x5791), 0x04 },
-	{ CCI_REG8(0x5792), 0x04 },
-	{ CCI_REG8(0x5793), 0x08 },
-	{ CCI_REG8(0x5794), 0x04 },
-	{ CCI_REG8(0x5795), 0x04 },
-	{ CCI_REG8(0x5799), 0x44 },
-	{ CCI_REG8(0x57a6), 0x1c },
-	{ CCI_REG8(0x57aa), 0xeb },
-	{ CCI_REG8(0x57ab), 0x7f },
-	{ CCI_REG8(0x57ac), 0x00 },
-	{ CCI_REG8(0x57ad), 0x00 },
-	{ CCI_REG8(0x58e0), 0xb4 },
-	{ CCI_REG8(0x3337), 0x00 },
-	{ CCI_REG8(0x391f), 0x41 },
-	{ CCI_REG8(0x3337), 0x30 },
-	{ CCI_REG8(0x391f), 0x40 },	/* DIFF vs FTM 0x41 */
-	{ CCI_REG8(0x3e06), 0x00 },
-	{ CCI_REG8(0x3e07), 0x80 },
-	{ CCI_REG8(0x3e09), 0x00 },
-	{ CCI_REG8(0x3200), 0x00 },	/* M */
-	{ CCI_REG8(0x3201), 0x00 },	/* M */
-	{ CCI_REG8(0x3202), 0x00 },	/* M */
-	{ CCI_REG8(0x3203), 0x00 },	/* M */
-	{ CCI_REG8(0x3204), 0x10 },	/* M */
-	{ CCI_REG8(0x3205), 0x7f },	/* M */
-	{ CCI_REG8(0x3206), 0x0c },	/* M */
-	{ CCI_REG8(0x3207), 0x3f },	/* M */
-	{ CCI_REG8(0x3208), 0x08 },	/* M, DIFF vs FTM 0x10 */
-	{ CCI_REG8(0x3209), 0x38 },	/* M, DIFF vs FTM 0x70 */
-	{ CCI_REG8(0x320a), 0x06 },	/* M, DIFF vs FTM 0x0c */
-	{ CCI_REG8(0x320b), 0x18 },	/* M, DIFF vs FTM 0x30 */
-	{ CCI_REG8(0x3210), 0x00 },	/* M */
-	{ CCI_REG8(0x3211), 0x04 },	/* M, DIFF vs FTM 0x08 */
-	{ CCI_REG8(0x3212), 0x00 },	/* M */
-	{ CCI_REG8(0x3213), 0x04 },	/* M, DIFF vs FTM 0x08 */
-	{ CCI_REG8(0x3215), 0x31 },	/* M, DIFF vs FTM 0x11 */
-	{ CCI_REG8(0x3220), 0x01 },	/* M, DIFF vs FTM 0x00 */
-	{ CCI_REG8(0x3221), 0x66 },	/* M */
-	{ CCI_REG8(0x5900), 0x01 },	/* M */
-	{ CCI_REG8(0x5901), 0x04 },	/* M, DIFF vs FTM 0x00, WARN: odd value for group-hold/OTP reg -- verify before use */
-};
-
-static const struct cci_reg_sequence sc1320cs_mode_1920x1080[] = {
-	{ CCI_REG8(0x301f), 0x00 },	/* DIFF vs FTM 0x1b */
-	{ CCI_REG8(0x301f), 0x00 },	/* DIFF vs FTM 0x1b */
-	{ CCI_REG8(0x36e9), 0x80 },
-	{ CCI_REG8(0x37f9), 0x80 },
-	{ CCI_REG8(0x36ea), 0x13 },
-	{ CCI_REG8(0x36eb), 0x0c },
-	{ CCI_REG8(0x36ec), 0x4b },
-	{ CCI_REG8(0x36ed), 0x18 },
-	{ CCI_REG8(0x36e9), 0x23 },	/* DIFF vs FTM 0x80 */
-	{ CCI_REG8(0x37f9), 0x24 },
-	{ CCI_REG8(0x301f), 0x31 },	/* DIFF vs FTM 0x1b */
-	{ CCI_REG8(0x320c), 0x04 },
-	{ CCI_REG8(0x320d), 0xe2 },
-	{ CCI_REG8(0x320e), 0x0c },
-	{ CCI_REG8(0x320f), 0x80 },
-	{ CCI_REG8(0x3279), 0x10 },
-	{ CCI_REG8(0x3301), 0x07 },
-	{ CCI_REG8(0x3302), 0x18 },
-	{ CCI_REG8(0x3304), 0x38 },
-	{ CCI_REG8(0x3306), 0x58 },
-	{ CCI_REG8(0x3308), 0x0c },
-	{ CCI_REG8(0x3309), 0x80 },
-	{ CCI_REG8(0x330b), 0xb8 },
-	{ CCI_REG8(0x330d), 0x10 },
-	{ CCI_REG8(0x330e), 0x2b },
-	{ CCI_REG8(0x3314), 0x15 },
-	{ CCI_REG8(0x331c), 0x04 },
-	{ CCI_REG8(0x331e), 0x29 },
-	{ CCI_REG8(0x331f), 0x71 },
-	{ CCI_REG8(0x3320), 0x08 },
-	{ CCI_REG8(0x3323), 0x04 },
-	{ CCI_REG8(0x3333), 0x10 },
-	{ CCI_REG8(0x3334), 0x40 },
-	{ CCI_REG8(0x3351), 0x06 },
-	{ CCI_REG8(0x335d), 0x60 },
-	{ CCI_REG8(0x3364), 0x56 },
-	{ CCI_REG8(0x337f), 0x13 },
-	{ CCI_REG8(0x3390), 0x09 },
-	{ CCI_REG8(0x3391), 0x0f },
-	{ CCI_REG8(0x3392), 0x1f },
-	{ CCI_REG8(0x3393), 0x10 },
-	{ CCI_REG8(0x3394), 0x1c },
-	{ CCI_REG8(0x3395), 0x20 },
-	{ CCI_REG8(0x33ac), 0x0a },
-	{ CCI_REG8(0x33ad), 0x14 },
-	{ CCI_REG8(0x33ae), 0x14 },
-	{ CCI_REG8(0x33af), 0x60 },
-	{ CCI_REG8(0x33b0), 0x0f },
-	{ CCI_REG8(0x33b2), 0x50 },
-	{ CCI_REG8(0x33b3), 0x28 },
-	{ CCI_REG8(0x349f), 0x1e },
-	{ CCI_REG8(0x34a6), 0x08 },
-	{ CCI_REG8(0x34a7), 0x09 },
-	{ CCI_REG8(0x34a8), 0x18 },
-	{ CCI_REG8(0x34a9), 0x18 },
-	{ CCI_REG8(0x34f8), 0x0f },
-	{ CCI_REG8(0x34f9), 0x18 },
-	{ CCI_REG8(0x3630), 0xc6 },	/* DIFF vs FTM 0xc8 */
-	{ CCI_REG8(0x3637), 0x47 },
-	{ CCI_REG8(0x363c), 0x8d },
-	{ CCI_REG8(0x3650), 0x21 },
-	{ CCI_REG8(0x3651), 0x9f },
-	{ CCI_REG8(0x3670), 0x0c },
-	{ CCI_REG8(0x367b), 0x56 },
-	{ CCI_REG8(0x367c), 0x67 },
-	{ CCI_REG8(0x367d), 0x67 },
-	{ CCI_REG8(0x367e), 0x08 },
-	{ CCI_REG8(0x367f), 0x0f },
-	{ CCI_REG8(0x3690), 0x84 },
-	{ CCI_REG8(0x3691), 0x87 },
-	{ CCI_REG8(0x3692), 0x8e },
-	{ CCI_REG8(0x3693), 0x9b },
-	{ CCI_REG8(0x3694), 0x09 },
-	{ CCI_REG8(0x3695), 0x0b },
-	{ CCI_REG8(0x3696), 0x0f },
-	{ CCI_REG8(0x3697), 0x8b },
-	{ CCI_REG8(0x3698), 0x8d },
-	{ CCI_REG8(0x3699), 0x8d },
-	{ CCI_REG8(0x369a), 0x08 },
-	{ CCI_REG8(0x369b), 0x0f },
-	{ CCI_REG8(0x370f), 0x01 },
-	{ CCI_REG8(0x3724), 0x41 },
-	{ CCI_REG8(0x3771), 0x03 },
-	{ CCI_REG8(0x3772), 0x03 },
-	{ CCI_REG8(0x3773), 0x63 },
-	{ CCI_REG8(0x377a), 0x08 },
-	{ CCI_REG8(0x377b), 0x0f },
-	{ CCI_REG8(0x3900), 0x0d },	/* DIFF vs FTM 0x1d */
-	{ CCI_REG8(0x3903), 0x20 },
-	{ CCI_REG8(0x3905), 0x0c },
-	{ CCI_REG8(0x3908), 0x40 },
-	{ CCI_REG8(0x391a), 0x30 },	/* DIFF vs FTM 0x1f */
-	{ CCI_REG8(0x391b), 0x21 },	/* DIFF vs FTM 0x16 */
-	{ CCI_REG8(0x391c), 0x13 },	/* DIFF vs FTM 0x0a */
-	{ CCI_REG8(0x391d), 0x00 },	/* DIFF vs FTM 0x05 */
-	{ CCI_REG8(0x391f), 0x41 },
-	{ CCI_REG8(0x3926), 0xe0 },
-	{ CCI_REG8(0x393f), 0x80 },
-	{ CCI_REG8(0x3940), 0x00 },
-	{ CCI_REG8(0x3941), 0x00 },
-	{ CCI_REG8(0x3942), 0x00 },
-	{ CCI_REG8(0x3943), 0x7c },
-	{ CCI_REG8(0x3944), 0x79 },
-	{ CCI_REG8(0x3945), 0x7d },
-	{ CCI_REG8(0x3946), 0x7d },
-	{ CCI_REG8(0x39dd), 0x00 },	/* DIFF vs FTM 0x02 */
-	{ CCI_REG8(0x39de), 0x04 },
-	{ CCI_REG8(0x39e7), 0x04 },	/* DIFF vs FTM 0x08 */
-	{ CCI_REG8(0x39e8), 0x03 },	/* DIFF vs FTM 0x80 */
-	{ CCI_REG8(0x39e9), 0x80 },
-	{ CCI_REG8(0x3e00), 0x01 },
-	{ CCI_REG8(0x3e01), 0x8f },
-	{ CCI_REG8(0x3e02), 0x90 },
-	{ CCI_REG8(0x3f08), 0x0a },
-	{ CCI_REG8(0x4401), 0x13 },
-	{ CCI_REG8(0x4402), 0x03 },
-	{ CCI_REG8(0x4403), 0x0c },
-	{ CCI_REG8(0x4404), 0x24 },
-	{ CCI_REG8(0x4405), 0x2f },
-	{ CCI_REG8(0x440c), 0x3c },
-	{ CCI_REG8(0x440d), 0x3c },
-	{ CCI_REG8(0x440e), 0x2d },
-	{ CCI_REG8(0x440f), 0x4b },
-	{ CCI_REG8(0x4413), 0x01 },
-	{ CCI_REG8(0x441b), 0x18 },
-	{ CCI_REG8(0x4509), 0x18 },
-	{ CCI_REG8(0x450d), 0x13 },
-	{ CCI_REG8(0x4800), 0x24 },
-	{ CCI_REG8(0x4837), 0x17 },	/* DIFF vs FTM 0x1a */
-	{ CCI_REG8(0x5000), 0x5e },	/* M, DIFF vs FTM 0x1e */
-	{ CCI_REG8(0x5002), 0x00 },
-	{ CCI_REG8(0x5015), 0x41 },
-	{ CCI_REG8(0x550e), 0x00 },
-	{ CCI_REG8(0x550f), 0x7a },
-	{ CCI_REG8(0x5780), 0x76 },
-	{ CCI_REG8(0x5784), 0x08 },
-	{ CCI_REG8(0x5787), 0x0a },
-	{ CCI_REG8(0x5788), 0x0a },
-	{ CCI_REG8(0x5789), 0x0a },
-	{ CCI_REG8(0x578a), 0x0a },
-	{ CCI_REG8(0x578b), 0x0a },
-	{ CCI_REG8(0x578c), 0x0a },
-	{ CCI_REG8(0x578d), 0x40 },
-	{ CCI_REG8(0x5790), 0x08 },
-	{ CCI_REG8(0x5791), 0x04 },
-	{ CCI_REG8(0x5792), 0x04 },
-	{ CCI_REG8(0x5793), 0x08 },
-	{ CCI_REG8(0x5794), 0x04 },
-	{ CCI_REG8(0x5795), 0x04 },
-	{ CCI_REG8(0x5799), 0x44 },
-	{ CCI_REG8(0x57a6), 0x1c },
-	{ CCI_REG8(0x57aa), 0xeb },
-	{ CCI_REG8(0x57ab), 0x7f },
-	{ CCI_REG8(0x57ac), 0x00 },
-	{ CCI_REG8(0x57ad), 0x00 },
-	{ CCI_REG8(0x58e0), 0xb4 },
-	{ CCI_REG8(0x3337), 0x00 },
-	{ CCI_REG8(0x391f), 0x41 },
-	{ CCI_REG8(0x3337), 0x30 },
-	{ CCI_REG8(0x391f), 0x40 },	/* DIFF vs FTM 0x41 */
-	{ CCI_REG8(0x3e06), 0x00 },
-	{ CCI_REG8(0x3e07), 0x80 },
-	{ CCI_REG8(0x3e09), 0x00 },
-	{ CCI_REG8(0x3200), 0x00 },	/* M */
-	{ CCI_REG8(0x3201), 0x00 },	/* M */
-	{ CCI_REG8(0x3202), 0x01 },	/* M, DIFF vs FTM 0x00 */
-	{ CCI_REG8(0x3203), 0xe0 },	/* M, DIFF vs FTM 0x00 */
-	{ CCI_REG8(0x3204), 0x10 },	/* M */
-	{ CCI_REG8(0x3205), 0x7f },	/* M */
-	{ CCI_REG8(0x3206), 0x0a },	/* M, DIFF vs FTM 0x0c */
-	{ CCI_REG8(0x3207), 0x5f },	/* M, DIFF vs FTM 0x3f */
-	{ CCI_REG8(0x3208), 0x07 },	/* M, DIFF vs FTM 0x10 */
-	{ CCI_REG8(0x3209), 0x80 },	/* M, DIFF vs FTM 0x70 */
-	{ CCI_REG8(0x320a), 0x04 },	/* M, DIFF vs FTM 0x0c */
-	{ CCI_REG8(0x320b), 0x38 },	/* M, DIFF vs FTM 0x30 */
-	{ CCI_REG8(0x3210), 0x00 },	/* M */
-	{ CCI_REG8(0x3211), 0x60 },	/* M, DIFF vs FTM 0x08 */
-	{ CCI_REG8(0x3212), 0x00 },	/* M */
-	{ CCI_REG8(0x3213), 0x04 },	/* M, DIFF vs FTM 0x08 */
-	{ CCI_REG8(0x3215), 0x31 },	/* M, DIFF vs FTM 0x11 */
-	{ CCI_REG8(0x3220), 0x01 },	/* M, DIFF vs FTM 0x00 */
-	{ CCI_REG8(0x3221), 0x66 },	/* M */
-	{ CCI_REG8(0x5900), 0x01 },	/* M */
-	{ CCI_REG8(0x5901), 0x04 },	/* M, DIFF vs FTM 0x00, WARN: odd value for group-hold/OTP reg -- verify before use */
-};
-
-static const struct cci_reg_sequence sc1320cs_mode_4160x2336[] = {
-	{ CCI_REG8(0x301f), 0x00 },	/* DIFF vs FTM 0x1b */
-	{ CCI_REG8(0x301f), 0x00 },	/* DIFF vs FTM 0x1b */
-	{ CCI_REG8(0x36e9), 0x80 },
-	{ CCI_REG8(0x37f9), 0x80 },
-	{ CCI_REG8(0x36ea), 0x13 },
-	{ CCI_REG8(0x36eb), 0x0c },
-	{ CCI_REG8(0x36ec), 0x4b },
-	{ CCI_REG8(0x36ed), 0x18 },
-	{ CCI_REG8(0x36e9), 0x23 },	/* DIFF vs FTM 0x80 */
-	{ CCI_REG8(0x37f9), 0x24 },
-	{ CCI_REG8(0x301f), 0x31 },	/* DIFF vs FTM 0x1b */
-	{ CCI_REG8(0x320c), 0x04 },
-	{ CCI_REG8(0x320d), 0xe2 },
-	{ CCI_REG8(0x320e), 0x0c },
-	{ CCI_REG8(0x320f), 0x80 },
-	{ CCI_REG8(0x3279), 0x10 },
-	{ CCI_REG8(0x3301), 0x07 },
-	{ CCI_REG8(0x3302), 0x18 },
-	{ CCI_REG8(0x3304), 0x38 },
-	{ CCI_REG8(0x3306), 0x58 },
-	{ CCI_REG8(0x3308), 0x0c },
-	{ CCI_REG8(0x3309), 0x80 },
-	{ CCI_REG8(0x330b), 0xb8 },
-	{ CCI_REG8(0x330d), 0x10 },
-	{ CCI_REG8(0x330e), 0x2b },
-	{ CCI_REG8(0x3314), 0x15 },
-	{ CCI_REG8(0x331c), 0x04 },
-	{ CCI_REG8(0x331e), 0x29 },
-	{ CCI_REG8(0x331f), 0x71 },
-	{ CCI_REG8(0x3320), 0x08 },
-	{ CCI_REG8(0x3323), 0x04 },
-	{ CCI_REG8(0x3333), 0x10 },
-	{ CCI_REG8(0x3334), 0x40 },
-	{ CCI_REG8(0x3351), 0x06 },
-	{ CCI_REG8(0x335d), 0x60 },
-	{ CCI_REG8(0x3364), 0x56 },
-	{ CCI_REG8(0x337f), 0x13 },
-	{ CCI_REG8(0x3390), 0x09 },
-	{ CCI_REG8(0x3391), 0x0f },
-	{ CCI_REG8(0x3392), 0x1f },
-	{ CCI_REG8(0x3393), 0x10 },
-	{ CCI_REG8(0x3394), 0x1c },
-	{ CCI_REG8(0x3395), 0x20 },
-	{ CCI_REG8(0x33ac), 0x0a },
-	{ CCI_REG8(0x33ad), 0x14 },
-	{ CCI_REG8(0x33ae), 0x14 },
-	{ CCI_REG8(0x33af), 0x60 },
-	{ CCI_REG8(0x33b0), 0x0f },
-	{ CCI_REG8(0x33b2), 0x50 },
-	{ CCI_REG8(0x33b3), 0x28 },
-	{ CCI_REG8(0x349f), 0x1e },
-	{ CCI_REG8(0x34a6), 0x08 },
-	{ CCI_REG8(0x34a7), 0x09 },
-	{ CCI_REG8(0x34a8), 0x18 },
-	{ CCI_REG8(0x34a9), 0x18 },
-	{ CCI_REG8(0x34f8), 0x0f },
-	{ CCI_REG8(0x34f9), 0x18 },
-	{ CCI_REG8(0x3630), 0xc6 },	/* DIFF vs FTM 0xc8 */
-	{ CCI_REG8(0x3637), 0x47 },
-	{ CCI_REG8(0x363c), 0x8d },
-	{ CCI_REG8(0x3650), 0x21 },
-	{ CCI_REG8(0x3651), 0x9f },
-	{ CCI_REG8(0x3670), 0x0c },
-	{ CCI_REG8(0x367b), 0x56 },
-	{ CCI_REG8(0x367c), 0x67 },
-	{ CCI_REG8(0x367d), 0x67 },
-	{ CCI_REG8(0x367e), 0x08 },
-	{ CCI_REG8(0x367f), 0x0f },
-	{ CCI_REG8(0x3690), 0x84 },
-	{ CCI_REG8(0x3691), 0x87 },
-	{ CCI_REG8(0x3692), 0x8e },
-	{ CCI_REG8(0x3693), 0x9b },
-	{ CCI_REG8(0x3694), 0x09 },
-	{ CCI_REG8(0x3695), 0x0b },
-	{ CCI_REG8(0x3696), 0x0f },
-	{ CCI_REG8(0x3697), 0x8b },
-	{ CCI_REG8(0x3698), 0x8d },
-	{ CCI_REG8(0x3699), 0x8d },
-	{ CCI_REG8(0x369a), 0x08 },
-	{ CCI_REG8(0x369b), 0x0f },
-	{ CCI_REG8(0x370f), 0x01 },
-	{ CCI_REG8(0x3724), 0x41 },
-	{ CCI_REG8(0x3771), 0x03 },
-	{ CCI_REG8(0x3772), 0x03 },
-	{ CCI_REG8(0x3773), 0x63 },
-	{ CCI_REG8(0x377a), 0x08 },
-	{ CCI_REG8(0x377b), 0x0f },
-	{ CCI_REG8(0x3900), 0x0d },	/* DIFF vs FTM 0x1d */
-	{ CCI_REG8(0x3903), 0x20 },
-	{ CCI_REG8(0x3905), 0x0c },
-	{ CCI_REG8(0x3908), 0x40 },
-	{ CCI_REG8(0x391a), 0x30 },	/* DIFF vs FTM 0x1f */
-	{ CCI_REG8(0x391b), 0x21 },	/* DIFF vs FTM 0x16 */
-	{ CCI_REG8(0x391c), 0x13 },	/* DIFF vs FTM 0x0a */
-	{ CCI_REG8(0x391d), 0x00 },	/* DIFF vs FTM 0x05 */
-	{ CCI_REG8(0x391f), 0x41 },
-	{ CCI_REG8(0x3926), 0xe0 },
-	{ CCI_REG8(0x393f), 0x80 },
-	{ CCI_REG8(0x3940), 0x00 },
-	{ CCI_REG8(0x3941), 0x00 },
-	{ CCI_REG8(0x3942), 0x00 },
-	{ CCI_REG8(0x3943), 0x7c },
-	{ CCI_REG8(0x3944), 0x79 },
-	{ CCI_REG8(0x3945), 0x7d },
-	{ CCI_REG8(0x3946), 0x7d },
-	{ CCI_REG8(0x39dd), 0x00 },	/* DIFF vs FTM 0x02 */
-	{ CCI_REG8(0x39de), 0x04 },
-	{ CCI_REG8(0x39e7), 0x04 },	/* DIFF vs FTM 0x08 */
-	{ CCI_REG8(0x39e8), 0x03 },	/* DIFF vs FTM 0x80 */
-	{ CCI_REG8(0x39e9), 0x80 },
-	{ CCI_REG8(0x3e00), 0x01 },
-	{ CCI_REG8(0x3e01), 0x8f },
-	{ CCI_REG8(0x3e02), 0x90 },
-	{ CCI_REG8(0x3f08), 0x0a },
-	{ CCI_REG8(0x4401), 0x13 },
-	{ CCI_REG8(0x4402), 0x03 },
-	{ CCI_REG8(0x4403), 0x0c },
-	{ CCI_REG8(0x4404), 0x24 },
-	{ CCI_REG8(0x4405), 0x2f },
-	{ CCI_REG8(0x440c), 0x3c },
-	{ CCI_REG8(0x440d), 0x3c },
-	{ CCI_REG8(0x440e), 0x2d },
-	{ CCI_REG8(0x440f), 0x4b },
-	{ CCI_REG8(0x4413), 0x01 },
-	{ CCI_REG8(0x441b), 0x18 },
-	{ CCI_REG8(0x4509), 0x18 },
-	{ CCI_REG8(0x450d), 0x13 },
-	{ CCI_REG8(0x4800), 0x24 },
-	{ CCI_REG8(0x4837), 0x17 },	/* DIFF vs FTM 0x1a */
-	{ CCI_REG8(0x5000), 0x1e },	/* M */
-	{ CCI_REG8(0x5002), 0x00 },
-	{ CCI_REG8(0x5015), 0x41 },
-	{ CCI_REG8(0x550e), 0x00 },
-	{ CCI_REG8(0x550f), 0x7a },
-	{ CCI_REG8(0x5780), 0x76 },
-	{ CCI_REG8(0x5784), 0x08 },
-	{ CCI_REG8(0x5787), 0x0a },
-	{ CCI_REG8(0x5788), 0x0a },
-	{ CCI_REG8(0x5789), 0x0a },
-	{ CCI_REG8(0x578a), 0x0a },
-	{ CCI_REG8(0x578b), 0x0a },
-	{ CCI_REG8(0x578c), 0x0a },
-	{ CCI_REG8(0x578d), 0x40 },
-	{ CCI_REG8(0x5790), 0x08 },
-	{ CCI_REG8(0x5791), 0x04 },
-	{ CCI_REG8(0x5792), 0x04 },
-	{ CCI_REG8(0x5793), 0x08 },
-	{ CCI_REG8(0x5794), 0x04 },
-	{ CCI_REG8(0x5795), 0x04 },
-	{ CCI_REG8(0x5799), 0x44 },
-	{ CCI_REG8(0x57a6), 0x1c },
-	{ CCI_REG8(0x57aa), 0xeb },
-	{ CCI_REG8(0x57ab), 0x7f },
-	{ CCI_REG8(0x57ac), 0x00 },
-	{ CCI_REG8(0x57ad), 0x00 },
-	{ CCI_REG8(0x58e0), 0xb4 },
-	{ CCI_REG8(0x3337), 0x00 },
-	{ CCI_REG8(0x391f), 0x41 },
-	{ CCI_REG8(0x3337), 0x30 },
-	{ CCI_REG8(0x391f), 0x40 },	/* DIFF vs FTM 0x41 */
-	{ CCI_REG8(0x3e06), 0x00 },
-	{ CCI_REG8(0x3e07), 0x80 },
-	{ CCI_REG8(0x3e09), 0x00 },
-	{ CCI_REG8(0x3200), 0x00 },	/* M */
-	{ CCI_REG8(0x3201), 0x00 },	/* M */
-	{ CCI_REG8(0x3202), 0x01 },	/* M, DIFF vs FTM 0x00 */
-	{ CCI_REG8(0x3203), 0x88 },	/* M, DIFF vs FTM 0x00 */
-	{ CCI_REG8(0x3204), 0x10 },	/* M */
-	{ CCI_REG8(0x3205), 0x7f },	/* M */
-	{ CCI_REG8(0x3206), 0x0a },	/* M, DIFF vs FTM 0x0c */
-	{ CCI_REG8(0x3207), 0xb7 },	/* M, DIFF vs FTM 0x3f */
-	{ CCI_REG8(0x3208), 0x10 },	/* M */
-	{ CCI_REG8(0x3209), 0x40 },	/* M, DIFF vs FTM 0x70 */
-	{ CCI_REG8(0x320a), 0x09 },	/* M, DIFF vs FTM 0x0c */
-	{ CCI_REG8(0x320b), 0x20 },	/* M, DIFF vs FTM 0x30 */
-	{ CCI_REG8(0x3210), 0x00 },	/* M */
-	{ CCI_REG8(0x3211), 0x20 },	/* M, DIFF vs FTM 0x08 */
-	{ CCI_REG8(0x3212), 0x00 },	/* M */
-	{ CCI_REG8(0x3213), 0x08 },	/* M */
-	{ CCI_REG8(0x3215), 0x11 },	/* M */
-	{ CCI_REG8(0x3220), 0x00 },	/* M */
-	{ CCI_REG8(0x3221), 0x66 },	/* M */
-	{ CCI_REG8(0x5900), 0x01 },	/* M */
-	{ CCI_REG8(0x5901), 0x00 },	/* M */
-};
-
-/* Order matters: mode 0 is the fallback and the init_state default.  All four
- * modes share HTS 1250 / VTS 3200 (blob-verified), so exposure and vblank
- * control ranges are mode-invariant. */
-static const struct sc1320cs_mode supported_modes[] = {
-	{ 4160, 3120, sc1320cs_mode_4160x3120,
-	  ARRAY_SIZE(sc1320cs_mode_4160x3120) },
-	{ 2104, 1560, sc1320cs_mode_2104x1560,
-	  ARRAY_SIZE(sc1320cs_mode_2104x1560) },
-	{ 1920, 1080, sc1320cs_mode_1920x1080,
-	  ARRAY_SIZE(sc1320cs_mode_1920x1080) },
-	{ 4160, 2336, sc1320cs_mode_4160x2336,
-	  ARRAY_SIZE(sc1320cs_mode_4160x2336) },
-};
-
-static const struct sc1320cs_mode *
-sc1320cs_find_mode(u32 width, u32 height)
-{
-	unsigned int i;
-
-	for (i = 0; i < ARRAY_SIZE(supported_modes); i++) {
-		if (supported_modes[i].width == width &&
-		    supported_modes[i].height == height)
-			return &supported_modes[i];
-	}
-
-	return NULL;
-}
-
 static int sc1320cs_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	struct sc1320cs *sensor = to_sc1320cs(sd);
@@ -1070,8 +455,8 @@ static int sc1320cs_s_stream(struct v4l2_subdev *sd, int enable)
 	/* Android leaves ~10ms between the soft reset and the mode table */
 	usleep_range(10000, 11000);
 
-	ret = cci_multi_reg_write(sensor->regmap, sensor->mode->regs,
-				  sensor->mode->num_regs, NULL);
+	ret = cci_multi_reg_write(sensor->regmap, sc1320cs_mode_4160x3120,
+				  ARRAY_SIZE(sc1320cs_mode_4160x3120), NULL);
 	if (ret) {
 		dev_err(sensor->dev, "failed to write mode table: %d\n", ret);
 		goto err_put;
@@ -1096,44 +481,11 @@ static int sc1320cs_get_fmt(struct v4l2_subdev *sd,
 			    struct v4l2_subdev_state *state,
 			    struct v4l2_subdev_format *fmt)
 {
-	struct v4l2_mbus_framefmt *mf;
-
-	mf = v4l2_subdev_state_get_format(state, fmt->pad, fmt->stream);
-	if (!mf)
-		return -EINVAL;
-
-	fmt->format = *mf;
-
-	return 0;
-}
-
-static int sc1320cs_set_fmt(struct v4l2_subdev *sd,
-			    struct v4l2_subdev_state *state,
-			    struct v4l2_subdev_format *fmt)
-{
-	struct sc1320cs *sensor = to_sc1320cs(sd);
-	struct v4l2_mbus_framefmt *mf;
-	const struct sc1320cs_mode *mode;
-
-	/* Exact match only; anything else snaps back to the full-res mode 0
-	 * rather than guessing a neighbour. */
-	mode = sc1320cs_find_mode(fmt->format.width, fmt->format.height);
-	if (!mode)
-		mode = &supported_modes[0];
-
-	mf = v4l2_subdev_state_get_format(state, fmt->pad, fmt->stream);
-	if (!mf)
-		return -EINVAL;
-
-	*mf = fmt->format;
-	mf->width = mode->width;
-	mf->height = mode->height;
-	mf->code = MEDIA_BUS_FMT_SBGGR10_1X10;
-	mf->field = V4L2_FIELD_NONE;
-	mf->colorspace = V4L2_COLORSPACE_RAW;
-
-	sensor->mode = mode;
-	fmt->format = *mf;
+	fmt->format.width = SC1320CS_NATIVE_WIDTH;
+	fmt->format.height = SC1320CS_NATIVE_HEIGHT;
+	fmt->format.code = MEDIA_BUS_FMT_SBGGR10_1X10;
+	fmt->format.field = V4L2_FIELD_NONE;
+	fmt->format.colorspace = V4L2_COLORSPACE_RAW;
 
 	return 0;
 }
@@ -1154,14 +506,13 @@ static int sc1320cs_enum_frame_size(struct v4l2_subdev *sd,
 				    struct v4l2_subdev_state *state,
 				    struct v4l2_subdev_frame_size_enum *fse)
 {
-	if (fse->index >= ARRAY_SIZE(supported_modes) ||
-	    fse->code != MEDIA_BUS_FMT_SBGGR10_1X10)
+	if (fse->index > 0 || fse->code != MEDIA_BUS_FMT_SBGGR10_1X10)
 		return -EINVAL;
 
-	fse->min_width = supported_modes[fse->index].width;
-	fse->max_width = supported_modes[fse->index].width;
-	fse->min_height = supported_modes[fse->index].height;
-	fse->max_height = supported_modes[fse->index].height;
+	fse->min_width = SC1320CS_NATIVE_WIDTH;
+	fse->max_width = SC1320CS_NATIVE_WIDTH;
+	fse->min_height = SC1320CS_NATIVE_HEIGHT;
+	fse->max_height = SC1320CS_NATIVE_HEIGHT;
 
 	return 0;
 }
@@ -1182,25 +533,9 @@ static int sc1320cs_get_selection(struct v4l2_subdev *sd,
 				  struct v4l2_subdev_state *state,
 				  struct v4l2_subdev_selection *sel)
 {
-	const struct v4l2_mbus_framefmt *mf;
-
 	switch (sel->target) {
 	case V4L2_SEL_TGT_CROP:
-		mf = v4l2_subdev_state_get_format(state, sel->pad, sel->stream);
-		if (!mf)
-			return -EINVAL;
-		sel->r.left = 0;
-		sel->r.top = 0;
-		sel->r.width = mf->width;
-		sel->r.height = mf->height;
-		return 0;
 	case V4L2_SEL_TGT_CROP_DEFAULT:
-		/* Mode 0 is the power-on readout. */
-		sel->r.left = 0;
-		sel->r.top = 0;
-		sel->r.width = supported_modes[0].width;
-		sel->r.height = supported_modes[0].height;
-		return 0;
 	case V4L2_SEL_TGT_CROP_BOUNDS:
 	case V4L2_SEL_TGT_NATIVE_SIZE:
 		sel->r.left = 0;
@@ -1217,22 +552,14 @@ static int sc1320cs_set_selection(struct v4l2_subdev *sd,
 				  struct v4l2_subdev_state *state,
 				  struct v4l2_subdev_selection *sel)
 {
-	struct v4l2_mbus_framefmt *mf;
-
 	if (sel->target != V4L2_SEL_TGT_CROP)
 		return -EINVAL;
 
-	/* Selection cannot switch modes (set_fmt does that); clamp the
-	 * request to the readout set_fmt chose and report what is really
-	 * read. */
-	mf = v4l2_subdev_state_get_format(state, sel->pad, sel->stream);
-	if (!mf)
-		return -EINVAL;
-
+	/* Only the full array is readable; report back what is really read. */
 	sel->r.left = 0;
 	sel->r.top = 0;
-	sel->r.width = mf->width;
-	sel->r.height = mf->height;
+	sel->r.width = SC1320CS_NATIVE_WIDTH;
+	sel->r.height = SC1320CS_NATIVE_HEIGHT;
 
 	return 0;
 }
@@ -1270,7 +597,7 @@ static const struct v4l2_subdev_pad_ops sc1320cs_pad_ops = {
 	.enum_mbus_code = sc1320cs_enum_mbus_code,
 	.enum_frame_size = sc1320cs_enum_frame_size,
 	.get_fmt = sc1320cs_get_fmt,
-	.set_fmt = sc1320cs_set_fmt,
+	.set_fmt = sc1320cs_get_fmt,
 	.get_selection = sc1320cs_get_selection,
 	.set_selection = sc1320cs_set_selection,
 };
@@ -1507,7 +834,6 @@ static int sc1320cs_probe(struct i2c_client *client)
 	 * where the IPA never runs and nothing else sets exposure -- is not
 	 * pitch dark.  See SC1320CS_EXPOSURE_DEF. */
 	sensor->exposure = SC1320CS_EXPOSURE_DEF;
-	sensor->mode = &supported_modes[0];
 	sensor->gain = 0;
 	sensor->vblank = SC1320CS_VTS_DEF - SC1320CS_NATIVE_HEIGHT;
 
