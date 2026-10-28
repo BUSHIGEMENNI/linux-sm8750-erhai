@@ -2298,8 +2298,13 @@
 
 		clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK>;
 		assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK_SRC>;
-		/* Same reference-design argument as the rear sensor's MCLK1. */
-		assigned-clock-rates = <24000000>;
+		/* Keep 19.2 MHz until the driver supports it: sc820cs probe
+		 * rejects 24 MHz ("xclk frequency not supported") and a failed
+		 * front probe leaves the camss async graph incomplete, which
+		 * takes the WORKING rear camera down with it.  Raising the
+		 * front needs the xclk table plus a link-freq re-derivation
+		 * (132 MHz pixel -> 330 Mbps/lane), a batch of its own. */
+		assigned-clock-rates = <19200000>;
 
 		pinctrl-0 = <&cam_mclk4_default>;
 		pinctrl-names = "default";
