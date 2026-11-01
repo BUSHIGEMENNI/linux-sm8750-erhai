@@ -137,13 +137,13 @@ MODULE_PARM_DESC(fw_project_id,
 	"project id used in the wireless_pen/<id>/cps8601_firmware.bin path");
 
 /* IRQ status bits (reg 0x07-0x08), from the vendor handler bit tests */
-#define CPS8601_IRQ_Q_CALI		BIT(0)
-#define CPS8601_IRQ_PING_OK		BIT(2)
+#define CPS8601_IRQ_Q_CALI		BIT(12)
+#define CPS8601_IRQ_PING_OK		BIT(1)
 #define CPS8601_IRQ_RX_FRAME		BIT(5)
 #define CPS8601_IRQ_CHG_STATE		BIT(6)
 #define CPS8601_IRQ_RX_ATTACH		BIT(9)
 #define CPS8601_IRQ_RX_DETACH		BIT(10)
-#define CPS8601_IRQ_TX_WAKEUP		BIT(12)
+#define CPS8601_IRQ_TX_WAKEUP		BIT(0)
 #define CPS8601_IRQ_MISLOCATED		BIT(13)
 
 /* chg status anomalies (reg 0x3e) */
@@ -321,19 +321,43 @@ static void cps8601_scan(struct cps8601 *chip)
  *   poll 0x13 for 1          -- calibration result,
  *   0x15 = 0xFF, GP_0 low.
  */
+/*
+ * Vendor-exact q_cali_work_func (oplus_cps8601.c:1348-1397).  The 8051
+ * sleeps at idle: every command sequence must start with the wake
+ * handshake -- raise the sleep line (tlmm 106), wait for the
+ * TX_WAKEUP interrupt (INT_FLAG bit 0) -- or the writes go nowhere.
+ * The earlier blind-msleep variant NAKed precisely because the core
+ * was never confirmed awake (2026-11-01 saga).
+ */
+static int cps8601_read16(struct cps8601 *chip, u16 reg, u16 *val);
+static int cps8601_write16(struct cps8601 *chip, u16 reg, u16 val);
+
 static int cps8601_q_cali(struct cps8601 *chip)
 {
-	unsigned int ctrl = 0, res = 0;
+	unsigned int ctrl = 0, res = 0, cnt = 0;
+	u16 flag = 0;
 	int i, ret;
 
-	/* Do NOT touch the sleep line here: power_on holds it LOW (working
-	 * state).  Driving it HIGH powers the MCU down and every following
-	 * register write NAKs -- the exact trap that masqueraded as a
-	 * "dark locked chip" for two power cycles (2026-11-01). */
+	/* Wake handshake: sleep line high, poll INT_FLAG bit0 <= 2.5 s. */
+	gpiod_set_value(chip->sleep_gpiod, 1);
+	for (i = 0; i < 100; i++) {
+		usleep_range(20000, 30000);
+		ret = cps8601_read16(chip, CPS8601_REG_IRQ_STATUS, &flag);
+		if (!ret && (flag & CPS8601_IRQ_TX_WAKEUP))
+			break;
+	}
+	if (!ret && !(flag & CPS8601_IRQ_TX_WAKEUP)) {
+		dev_warn(chip->dev, "q-cali: no wakeup irq (flag %#x)\n", flag);
+		goto out_sleep_low;
+	}
+	/* vendor writes INT_EN = 0xffff in every irq pass */
+	cps8601_write16(chip, CPS8601_REG_IRQ_CLEAR, 0xffff);
+	cps8601_write16(chip, 0x05, 0xffff);
+
 	ret = regmap_write(chip->regmap, CPS8601_REG_Q_CALI_MODE,
 			   CPS8601_CALI_ENTER);
 	if (ret)
-		goto out;
+		goto out_sleep_low;
 
 	gpiod_set_value(chip->scan_gpiod, 1);
 
@@ -341,25 +365,31 @@ static int cps8601_q_cali(struct cps8601 *chip)
 	ctrl |= CPS8601_CMD_START_Q_CALI;
 	regmap_write(chip->regmap, CPS8601_REG_CTRL, ctrl);
 
-	for (i = 0; i < 50; i++) {
-		msleep(100);
-		regmap_read(chip->regmap, CPS8601_REG_Q_CALI_RES, &res);
-		if (res)
+	/* Wait for the Q_CALI interrupt (INT_FLAG bit 12) <= 5 s. */
+	for (i = 0; i < 200; i++) {
+		usleep_range(20000, 30000);
+		ret = cps8601_read16(chip, CPS8601_REG_IRQ_STATUS, &flag);
+		if (!ret && (flag & CPS8601_IRQ_Q_CALI))
 			break;
 	}
+	regmap_read(chip->regmap, CPS8601_REG_Q_CALI_RES, &res);
+	regmap_read(chip->regmap, 0x0d, &cnt);
 
 	regmap_write(chip->regmap, CPS8601_REG_Q_CALI_MODE,
 		     CPS8601_CALI_EXIT);
 
 	if (res == 1)
-		dev_info(chip->dev, "q-cali success after %d00 ms\n", i);
+		dev_info(chip->dev,
+			 "q-cali success (flag %#x, times %u, %u ms)\n",
+			 flag, cnt, i * 25);
 	else
-		dev_warn(chip->dev, "q-cali failed (res=%u after 5 s)\n", res);
+		dev_warn(chip->dev,
+			 "q-cali failed (res %u, flag %#x, times %u)\n",
+			 res, flag, cnt);
 
+out_sleep_low:
+	gpiod_set_value(chip->sleep_gpiod, 0);
 	return res == 1 ? 0 : -EIO;
-
-out:
-	return ret;
 }
 
 static int cps8601_read16(struct cps8601 *chip, u16 reg, u16 *val)
