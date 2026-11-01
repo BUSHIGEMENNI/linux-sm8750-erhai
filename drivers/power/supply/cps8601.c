@@ -54,6 +54,11 @@
 #define CPS8601_REG_TX_VOLTAGE		0x34	/* 2B R */
 #define CPS8601_REG_TX_CURRENT		0x38	/* 2B R */
 #define CPS8601_REG_CHG_STATUS		0x3e	/* 1B R */
+#define CPS8601_REG_Q_CALI_RES		0x13	/* 1B R, 1 = calibrated ok */
+#define CPS8601_REG_Q_CALI_MODE		0x15	/* 1B W, 0xAA enter / 0xFF exit */
+#define CPS8601_CALI_ENTER		0xAA
+#define CPS8601_CALI_EXIT		0xFF
+#define CPS8601_CMD_START_Q_CALI	0x40	/* CTRL bit 6, vendor RMW */
 #define CPS8601_REG_RX_FRAME		0x40	/* 11B burst */
 
 #define CPS8601_CHIP_ID			0x8601
@@ -303,6 +308,59 @@ static void cps8601_scan(struct cps8601 *chip)
 	gpiod_set_value(chip->scan_gpiod, 1);
 	msleep(50);
 	gpiod_set_value(chip->scan_gpiod, 0);
+}
+
+/*
+ * Vendor q_cali_work_func: the TX tank needs a resonance calibration
+ * before the chip will radiate.  Without it the scan pulse is a no-op
+ * (TX voltage stays 0 -- 2026-10-29 measured).  Sequence:
+ *   GP_0 (sleep) high 2.5 s  -- wake the TX subsystem,
+ *   0x15 = 0xAA              -- enter calibration mode,
+ *   GP_1 (scan) high,
+ *   CTRL 0x0b |= 0x40        -- START_Q_CALI,
+ *   poll 0x13 for 1          -- calibration result,
+ *   0x15 = 0xFF, GP_0 low.
+ */
+static int cps8601_q_cali(struct cps8601 *chip)
+{
+	unsigned int ctrl = 0, res = 0;
+	int i, ret;
+
+	gpiod_set_value(chip->sleep_gpiod, 1);
+	msleep(2500);
+
+	ret = regmap_write(chip->regmap, CPS8601_REG_Q_CALI_MODE,
+			   CPS8601_CALI_ENTER);
+	if (ret)
+		goto out;
+
+	gpiod_set_value(chip->scan_gpiod, 1);
+
+	regmap_read(chip->regmap, CPS8601_REG_CTRL, &ctrl);
+	ctrl |= CPS8601_CMD_START_Q_CALI;
+	regmap_write(chip->regmap, CPS8601_REG_CTRL, ctrl);
+
+	for (i = 0; i < 50; i++) {
+		msleep(100);
+		regmap_read(chip->regmap, CPS8601_REG_Q_CALI_RES, &res);
+		if (res)
+			break;
+	}
+
+	regmap_write(chip->regmap, CPS8601_REG_Q_CALI_MODE,
+		     CPS8601_CALI_EXIT);
+	gpiod_set_value(chip->sleep_gpiod, 0);
+
+	if (res == 1)
+		dev_info(chip->dev, "q-cali success after %d00 ms\n", i);
+	else
+		dev_warn(chip->dev, "q-cali failed (res=%u after 5 s)\n", res);
+
+	return res == 1 ? 0 : -EIO;
+
+out:
+	gpiod_set_value(chip->sleep_gpiod, 0);
+	return ret;
 }
 
 static int cps8601_read16(struct cps8601 *chip, u16 reg, u16 *val)
@@ -953,6 +1011,8 @@ static ssize_t scan_store(struct device *dev,
 		return ret;
 	if (v)
 		cps8601_scan(chip);
+	else
+		cps8601_q_cali(chip);
 	return count;
 }
 static DEVICE_ATTR_WO(scan);
