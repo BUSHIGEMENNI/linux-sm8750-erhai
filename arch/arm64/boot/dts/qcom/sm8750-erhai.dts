@@ -1437,7 +1437,10 @@
 		int-gpios = <&tlmm 172 GPIO_ACTIVE_HIGH>;
 		sleep-gpios = <&tlmm 106 GPIO_ACTIVE_HIGH>;
 		scan-gpios = <&tlmm 56 GPIO_ACTIVE_HIGH>;
-		boost-en-gpios = <&tlmm 107 GPIO_ACTIVE_HIGH>;
+		/* tlmm 107 is the stock "wls_off_state" line: high = charge
+		 * inhibit, low = allow (vendor GP_3).  It is NOT a boost
+		 * enable -- the coil rail is hboost via ADSP glink. */
+		off-state-gpios = <&tlmm 107 GPIO_ACTIVE_HIGH>;
 		sw-en-gpios = <&tlmm 105 GPIO_ACTIVE_HIGH>;
 
 		oplus,ocp-threshold = <500>;

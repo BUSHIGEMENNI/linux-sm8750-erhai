@@ -280,7 +280,7 @@ static void cps8601_power_on(struct cps8601 *chip)
 	 * high for the whole session: it is the boost enable that powers
 	 * the MCU, not an off request.
 	 */
-	gpiod_set_value(chip->boost_en_gpiod, 1);
+	gpiod_set_value(chip->off_state_gpiod, 1);
 	gpiod_set_value(chip->scan_gpiod, 1);
 	gpiod_set_value(chip->sleep_gpiod, 0);
 	gpiod_set_value(chip->sw_en_gpiod, 1);
@@ -300,7 +300,7 @@ static void cps8601_power_off(struct cps8601 *chip)
 	gpiod_set_value(chip->sw_en_gpiod, 0);
 	gpiod_set_value(chip->sleep_gpiod, 0);
 	gpiod_set_value(chip->scan_gpiod, 0);
-	gpiod_set_value(chip->boost_en_gpiod, 0);
+	gpiod_set_value(chip->off_state_gpiod, 0);
 }
 
 static void cps8601_scan(struct cps8601 *chip)
@@ -891,7 +891,7 @@ static void cps8601_init_work(struct work_struct *work)
 		if (chip->init_retries++ < 3 && !chip->removing) {
 			gpiod_set_value(chip->sw_en_gpiod, 0);
 			gpiod_set_value(chip->scan_gpiod, 0);
-			gpiod_set_value(chip->boost_en_gpiod, 0);
+			gpiod_set_value(chip->off_state_gpiod, 0);
 			schedule_delayed_work(&chip->ready_work,
 					      msecs_to_jiffies(15000));
 		}
@@ -942,7 +942,7 @@ static void cps8601_init_work(struct work_struct *work)
 	 * did) leaves the MCU in its setup state; only this handoff lets it
 	 * enter ping/TX mode.
 	 */
-	gpiod_set_value(chip->boost_en_gpiod, 0);
+	gpiod_set_value(chip->off_state_gpiod, 0);
 	schedule_delayed_work(&chip->ready_work, msecs_to_jiffies(1250));
 	__pm_relax(chip->ws);
 	return;
@@ -1127,10 +1127,10 @@ static int cps8601_probe(struct i2c_client *client)
 	chip->int_gpiod = devm_gpiod_get(dev, "int", GPIOD_IN);
 	chip->sleep_gpiod = devm_gpiod_get(dev, "sleep", GPIOD_OUT_LOW);
 	chip->scan_gpiod = devm_gpiod_get(dev, "scan", GPIOD_OUT_LOW);
-	chip->boost_en_gpiod = devm_gpiod_get(dev, "boost-en", GPIOD_OUT_LOW);
+	chip->off_state_gpiod = devm_gpiod_get(dev, "off-state", GPIOD_OUT_LOW);
 	chip->sw_en_gpiod = devm_gpiod_get(dev, "sw-en", GPIOD_OUT_LOW);
 	if (IS_ERR(chip->int_gpiod) || IS_ERR(chip->sleep_gpiod) ||
-	    IS_ERR(chip->scan_gpiod) || IS_ERR(chip->boost_en_gpiod) ||
+	    IS_ERR(chip->scan_gpiod) || IS_ERR(chip->off_state_gpiod) ||
 	    IS_ERR(chip->sw_en_gpiod))
 		return dev_err_probe(dev, -EINVAL, "control gpio missing\n");
 
