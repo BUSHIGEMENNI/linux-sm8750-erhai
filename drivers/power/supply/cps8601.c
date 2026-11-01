@@ -326,9 +326,10 @@ static int cps8601_q_cali(struct cps8601 *chip)
 	unsigned int ctrl = 0, res = 0;
 	int i, ret;
 
-	gpiod_set_value(chip->sleep_gpiod, 1);
-	msleep(2500);
-
+	/* Do NOT touch the sleep line here: power_on holds it LOW (working
+	 * state).  Driving it HIGH powers the MCU down and every following
+	 * register write NAKs -- the exact trap that masqueraded as a
+	 * "dark locked chip" for two power cycles (2026-11-01). */
 	ret = regmap_write(chip->regmap, CPS8601_REG_Q_CALI_MODE,
 			   CPS8601_CALI_ENTER);
 	if (ret)
@@ -349,7 +350,6 @@ static int cps8601_q_cali(struct cps8601 *chip)
 
 	regmap_write(chip->regmap, CPS8601_REG_Q_CALI_MODE,
 		     CPS8601_CALI_EXIT);
-	gpiod_set_value(chip->sleep_gpiod, 0);
 
 	if (res == 1)
 		dev_info(chip->dev, "q-cali success after %d00 ms\n", i);
@@ -359,7 +359,6 @@ static int cps8601_q_cali(struct cps8601 *chip)
 	return res == 1 ? 0 : -EIO;
 
 out:
-	gpiod_set_value(chip->sleep_gpiod, 0);
 	return ret;
 }
 
