@@ -338,26 +338,24 @@ static int cps8601_q_cali(struct cps8601 *chip)
 	u16 flag = 0;
 	int i, ret;
 
-	/* Wake handshake: sleep line high, poll INT_FLAG bit0 <= 2.5 s. */
-	gpiod_set_value(chip->sleep_gpiod, 1);
-	for (i = 0; i < 100; i++) {
-		usleep_range(20000, 30000);
-		ret = cps8601_read16(chip, CPS8601_REG_IRQ_STATUS, &flag);
-		if (!ret && (flag & CPS8601_IRQ_TX_WAKEUP))
-			break;
-	}
-	if (!ret && !(flag & CPS8601_IRQ_TX_WAKEUP)) {
-		dev_warn(chip->dev, "q-cali: no wakeup irq (flag %#x)\n", flag);
-		goto out_sleep_low;
-	}
+	/* Wake handshake: the vendor raises its GP_0 (sleep) line, but on
+	 * this board raising tlmm-106 kills the whole I2C bus (measured
+	 * twice, 2026-11-01).  The firmware-update path instead drives the
+	 * INT pin high for the session -- that handshake is proven to work
+	 * here (hundreds of bootloader writes landed through it), so use
+	 * the same one. */
+	gpiod_direction_output(chip->int_gpiod, 1);
+	msleep(50);
 	/* vendor writes INT_EN = 0xffff in every irq pass */
 	cps8601_write16(chip, CPS8601_REG_IRQ_CLEAR, 0xffff);
 	cps8601_write16(chip, 0x05, 0xffff);
 
 	ret = regmap_write(chip->regmap, CPS8601_REG_Q_CALI_MODE,
 			   CPS8601_CALI_ENTER);
-	if (ret)
-		goto out_sleep_low;
+	if (ret) {
+		gpiod_direction_input(chip->int_gpiod);
+		return ret;
+	}
 
 	gpiod_set_value(chip->scan_gpiod, 1);
 
@@ -387,8 +385,7 @@ static int cps8601_q_cali(struct cps8601 *chip)
 			 "q-cali failed (res %u, flag %#x, times %u)\n",
 			 res, flag, cnt);
 
-out_sleep_low:
-	gpiod_set_value(chip->sleep_gpiod, 0);
+	gpiod_direction_input(chip->int_gpiod);
 	return res == 1 ? 0 : -EIO;
 }
 
@@ -970,7 +967,9 @@ static void cps8601_ready_work(struct work_struct *work)
 		return;
 
 	__pm_stay_awake(chip->ws);
-	gpiod_set_value(chip->sw_en_gpiod, 0);
+	/* vendor terminal state keeps sw_en HIGH (it gates the MCU supply);
+	 * dropping it here killed the bus right after "ready" and made every
+	 * later register write NAK (2026-11-01 endgame). */
 	gpiod_set_value(chip->scan_gpiod, 0);
 	msleep(50);
 	gpiod_set_value(chip->scan_gpiod, 1);
