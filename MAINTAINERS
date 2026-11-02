@@ -19208,6 +19208,13 @@ F:	include/linux/sched/nohz.h
 F:	include/linux/tick.h
 F:	kernel/time/tick*.*
 
+CHIPNEXT CN3927 CAMERA VCM DRIVER
+M:	yading <yading@users.noreply.github.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/chipnext,cn3927.yaml
+F:	drivers/media/i2c/cn3927.c
+
 NOKIA N900 CAMERA SUPPORT (ET8EK8 SENSOR, AD5820 FOCUS)
 M:	Pavel Machek <pavel@kernel.org>
 M:	Sakari Ailus <sakari.ailus@iki.fi>
