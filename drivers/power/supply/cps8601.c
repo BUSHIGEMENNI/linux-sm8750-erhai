@@ -160,7 +160,7 @@ struct cps8601 {
 	struct gpio_desc	*int_gpiod;
 	struct gpio_desc	*sleep_gpiod;
 	struct gpio_desc	*scan_gpiod;
-	struct gpio_desc	*boost_en_gpiod;
+	struct gpio_desc	*off_state_gpiod;
 	struct gpio_desc	*sw_en_gpiod;
 
 	struct work_struct	init_work;
