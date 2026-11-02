@@ -25147,6 +25147,14 @@ F:	arch/arm/boot/dts/nxp/imx/imx6*-cubox-i*
 F:	arch/arm/boot/dts/nxp/imx/imx6*-hummingboard*
 F:	arch/arm/boot/dts/nxp/imx/imx6*-sr-*
 
+SMARTSENS SC820CS CAMERA SENSOR DRIVER
+M:	yading <yading@users.noreply.github.com>
+L:	linux-media@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/media/i2c/smartsens,sc820cs.yaml
+F:	drivers/media/i2c/sc820cs-caihong-regs.h
+F:	drivers/media/i2c/sc820cs.c
+
 SONIC NETWORK DRIVER
 M:	Thomas Bogendoerfer <tsbogend@alpha.franken.de>
 L:	netdev@vger.kernel.org
