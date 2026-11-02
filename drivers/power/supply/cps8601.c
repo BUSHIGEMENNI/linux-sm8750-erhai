@@ -1055,6 +1055,45 @@ static ssize_t wireless_reg_show(struct device *dev,
 	return sysfs_emit(buf, "0x%04x = 0x%04x\n", chip->debug_reg, val);
 }
 
+/*
+ * Vendor FSK broadcast (cps_wls_send_fsk_packet with {0x1f, 0xac}, the
+ * remove-path wake packet): the pen's BLE wakes and advertises for a
+ * short window on receiving it over the coil link.  Userspace pairs
+ * the pen inside that window.
+ */
+static int cps8601_send_wake_fsk(struct cps8601 *chip)
+{
+	unsigned int ctrl = 0;
+	int ret;
+
+	ret = regmap_write(chip->regmap, 0x4b, 0x1f);
+	if (ret)
+		return ret;
+	ret = regmap_write(chip->regmap, 0x4c, 0xac);
+	if (ret)
+		return ret;
+	regmap_read(chip->regmap, CPS8601_REG_CTRL, &ctrl);
+	return regmap_write(chip->regmap, CPS8601_REG_CTRL,
+			    ctrl | 0x10 /* TX_CMD_SEND_FSK */);
+}
+
+static ssize_t fsk_store(struct device *dev,
+			 struct device_attribute *attr,
+			 const char *buf, size_t count)
+{
+	struct cps8601 *chip = i2c_get_clientdata(to_i2c_client(dev));
+	bool v;
+	int ret;
+
+	ret = kstrtobool(buf, &v);
+	if (ret)
+		return ret;
+	if (v)
+		cps8601_send_wake_fsk(chip);
+	return count;
+}
+static DEVICE_ATTR_WO(fsk);
+
 static ssize_t wireless_reg_store(struct device *dev,
 				  struct device_attribute *attr,
 				  const char *buf, size_t count)
@@ -1080,6 +1119,7 @@ static struct attribute *cps8601_attrs[] = {
 	&dev_attr_tx_current.attr,
 	&dev_attr_scan.attr,
 	&dev_attr_wireless_reg.attr,
+	&dev_attr_fsk.attr,
 	NULL
 };
 ATTRIBUTE_GROUPS(cps8601);
