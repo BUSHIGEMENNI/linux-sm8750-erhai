@@ -104,6 +104,8 @@ struct sc1320cs {
 	u32 exposure;
 	u32 gain;
 	u32 vblank;
+	u16 mode_w;   /* requested readout (set_fmt), 0 = full-res */
+	u16 mode_h;
 };
 
 static inline struct sc1320cs *to_sc1320cs(struct v4l2_subdev *sd)
@@ -433,6 +435,234 @@ static const struct cci_reg_sequence sc1320cs_mode_4160x3120[] = {
 	{ CCI_REG8(0x391f), 0x41 },
 };
 
+/*
+ * Optional 2104x1560 2x2-binned readout (the vendor preview workhorse).
+ * Gated behind the expose_2104 module parameter and invisible by default:
+ * libcamera's simple pipeline picks the smallest mode that satisfies the
+ * request, so merely advertising it changes every preview stream.  The
+ * table is the proven mode-0 table with only the nine binned-mode value
+ * changes from the vendor blob; the mode-0 tail block is kept verbatim
+ * (single-variable rule, LESSONS #98/#99).
+ */
+static bool expose_2104;
+module_param(expose_2104, bool, 0644);
+MODULE_PARM_DESC(expose_2104, "advertise the 2104x1560 binned readout");
+
+static const struct cci_reg_sequence sc1320cs_mode_2104x1560[] = {
+
+	{ CCI_REG8(0x36e9), 0x80 },
+	{ CCI_REG8(0x37f9), 0x80 },
+	{ CCI_REG8(0x36ea), 0x13 },
+	{ CCI_REG8(0x36eb), 0x0c },
+	{ CCI_REG8(0x36ec), 0x4b },
+	{ CCI_REG8(0x36ed), 0x18 },
+	{ CCI_REG8(0x36e9), 0x23 },
+	{ CCI_REG8(0x37f9), 0x24 },
+	{ CCI_REG8(0x301f), 0x31 },
+	{ CCI_REG8(0x320c), 0x04 },
+	{ CCI_REG8(0x320d), 0xe2 },
+	{ CCI_REG8(0x320e), 0x0c },
+	{ CCI_REG8(0x320f), 0x80 },
+	{ CCI_REG8(0x3279), 0x10 },
+	{ CCI_REG8(0x3301), 0x07 },
+	{ CCI_REG8(0x3302), 0x18 },
+	{ CCI_REG8(0x3304), 0x38 },
+	{ CCI_REG8(0x3306), 0x58 },
+	{ CCI_REG8(0x3308), 0x0c },
+	{ CCI_REG8(0x3309), 0x80 },
+	{ CCI_REG8(0x330b), 0xb8 },
+	{ CCI_REG8(0x330d), 0x10 },
+	{ CCI_REG8(0x330e), 0x2b },
+	{ CCI_REG8(0x3314), 0x15 },
+	{ CCI_REG8(0x331c), 0x04 },
+	{ CCI_REG8(0x331e), 0x29 },
+	{ CCI_REG8(0x331f), 0x71 },
+	{ CCI_REG8(0x3320), 0x08 },
+	{ CCI_REG8(0x3323), 0x04 },
+	{ CCI_REG8(0x3333), 0x10 },
+	{ CCI_REG8(0x3334), 0x40 },
+	{ CCI_REG8(0x3351), 0x06 },
+	{ CCI_REG8(0x335d), 0x60 },
+	{ CCI_REG8(0x3364), 0x56 },
+	{ CCI_REG8(0x337f), 0x13 },
+	{ CCI_REG8(0x3390), 0x09 },
+	{ CCI_REG8(0x3391), 0x0f },
+	{ CCI_REG8(0x3392), 0x1f },
+	{ CCI_REG8(0x3393), 0x10 },
+	{ CCI_REG8(0x3394), 0x1c },
+	{ CCI_REG8(0x3395), 0x20 },
+	{ CCI_REG8(0x33ac), 0x0a },
+	{ CCI_REG8(0x33ad), 0x14 },
+	{ CCI_REG8(0x33ae), 0x14 },
+	{ CCI_REG8(0x33af), 0x60 },
+	{ CCI_REG8(0x33b0), 0x0f },
+	{ CCI_REG8(0x33b2), 0x50 },
+	{ CCI_REG8(0x33b3), 0x28 },
+	{ CCI_REG8(0x349f), 0x1e },
+	{ CCI_REG8(0x34a6), 0x08 },
+	{ CCI_REG8(0x34a7), 0x09 },
+	{ CCI_REG8(0x34a8), 0x18 },
+	{ CCI_REG8(0x34a9), 0x18 },
+	{ CCI_REG8(0x34f8), 0x0f },
+	{ CCI_REG8(0x34f9), 0x18 },
+	{ CCI_REG8(0x3630), 0xc6 },
+	{ CCI_REG8(0x3637), 0x47 },
+	{ CCI_REG8(0x363c), 0x8d },
+	{ CCI_REG8(0x3650), 0x21 },
+	{ CCI_REG8(0x3651), 0x9f },
+	{ CCI_REG8(0x3670), 0x0c },
+	{ CCI_REG8(0x367b), 0x56 },
+	{ CCI_REG8(0x367c), 0x67 },
+	{ CCI_REG8(0x367d), 0x67 },
+	{ CCI_REG8(0x367e), 0x08 },
+	{ CCI_REG8(0x367f), 0x0f },
+	{ CCI_REG8(0x3690), 0x84 },
+	{ CCI_REG8(0x3691), 0x87 },
+	{ CCI_REG8(0x3692), 0x8e },
+	{ CCI_REG8(0x3693), 0x9b },
+	{ CCI_REG8(0x3694), 0x09 },
+	{ CCI_REG8(0x3695), 0x0b },
+	{ CCI_REG8(0x3696), 0x0f },
+	{ CCI_REG8(0x3697), 0x8b },
+	{ CCI_REG8(0x3698), 0x8d },
+	{ CCI_REG8(0x3699), 0x8d },
+	{ CCI_REG8(0x369a), 0x08 },
+	{ CCI_REG8(0x369b), 0x0f },
+	{ CCI_REG8(0x370f), 0x01 },
+	{ CCI_REG8(0x3724), 0x41 },
+	{ CCI_REG8(0x3771), 0x03 },
+	{ CCI_REG8(0x3772), 0x03 },
+	{ CCI_REG8(0x3773), 0x63 },
+	{ CCI_REG8(0x377a), 0x08 },
+	{ CCI_REG8(0x377b), 0x0f },
+	{ CCI_REG8(0x3900), 0x0d },
+	{ CCI_REG8(0x3903), 0x20 },
+	{ CCI_REG8(0x3905), 0x0c },
+	{ CCI_REG8(0x3908), 0x40 },
+	{ CCI_REG8(0x391a), 0x30 },
+	{ CCI_REG8(0x391b), 0x21 },
+	{ CCI_REG8(0x391c), 0x13 },
+	{ CCI_REG8(0x391d), 0x00 },
+	{ CCI_REG8(0x391f), 0x41 },
+	{ CCI_REG8(0x3926), 0xe0 },
+	{ CCI_REG8(0x393f), 0x80 },
+	{ CCI_REG8(0x3940), 0x00 },
+	{ CCI_REG8(0x3941), 0x00 },
+	{ CCI_REG8(0x3942), 0x00 },
+	{ CCI_REG8(0x3943), 0x7c },
+	{ CCI_REG8(0x3944), 0x79 },
+	{ CCI_REG8(0x3945), 0x7d },
+	{ CCI_REG8(0x3946), 0x7d },
+	{ CCI_REG8(0x39dd), 0x00 },
+	{ CCI_REG8(0x39de), 0x04 },
+	{ CCI_REG8(0x39e7), 0x04 },
+	{ CCI_REG8(0x39e8), 0x03 },
+	{ CCI_REG8(0x39e9), 0x80 },
+	{ CCI_REG8(0x3e00), 0x01 },
+	{ CCI_REG8(0x3e01), 0x8f },
+	{ CCI_REG8(0x3e02), 0x90 },
+	{ CCI_REG8(0x3f08), 0x0a },
+	{ CCI_REG8(0x4401), 0x13 },
+	{ CCI_REG8(0x4402), 0x03 },
+	{ CCI_REG8(0x4403), 0x0c },
+	{ CCI_REG8(0x4404), 0x24 },
+	{ CCI_REG8(0x4405), 0x2f },
+	{ CCI_REG8(0x440c), 0x3c },
+	{ CCI_REG8(0x440d), 0x3c },
+	{ CCI_REG8(0x440e), 0x2d },
+	{ CCI_REG8(0x440f), 0x4b },
+	{ CCI_REG8(0x4413), 0x01 },
+	{ CCI_REG8(0x441b), 0x18 },
+	{ CCI_REG8(0x4509), 0x18 },
+	{ CCI_REG8(0x450d), 0x13 },
+	{ CCI_REG8(0x4800), 0x24 },
+	{ CCI_REG8(0x4837), 0x17 },
+	{ CCI_REG8(0x5000), 0x5e },
+	{ CCI_REG8(0x5002), 0x00 },
+	{ CCI_REG8(0x5015), 0x41 },
+	{ CCI_REG8(0x550e), 0x00 },
+	{ CCI_REG8(0x550f), 0x7a },
+	{ CCI_REG8(0x5780), 0x76 },
+	{ CCI_REG8(0x5784), 0x08 },
+	{ CCI_REG8(0x5787), 0x0a },
+	{ CCI_REG8(0x5788), 0x0a },
+	{ CCI_REG8(0x5789), 0x0a },
+	{ CCI_REG8(0x578a), 0x0a },
+	{ CCI_REG8(0x578b), 0x0a },
+	{ CCI_REG8(0x578c), 0x0a },
+	{ CCI_REG8(0x578d), 0x40 },
+	{ CCI_REG8(0x5790), 0x08 },
+	{ CCI_REG8(0x5791), 0x04 },
+	{ CCI_REG8(0x5792), 0x04 },
+	{ CCI_REG8(0x5793), 0x08 },
+	{ CCI_REG8(0x5794), 0x04 },
+	{ CCI_REG8(0x5795), 0x04 },
+	{ CCI_REG8(0x5799), 0x44 },
+	{ CCI_REG8(0x57a6), 0x1c },
+	{ CCI_REG8(0x57aa), 0xeb },
+	{ CCI_REG8(0x57ab), 0x7f },
+	{ CCI_REG8(0x57ac), 0x00 },
+	{ CCI_REG8(0x57ad), 0x00 },
+	{ CCI_REG8(0x58e0), 0xb4 },
+	{ CCI_REG8(0x3200), 0x00 },
+	{ CCI_REG8(0x3201), 0x00 },
+	{ CCI_REG8(0x3202), 0x00 },
+	{ CCI_REG8(0x3203), 0x00 },
+	{ CCI_REG8(0x3204), 0x10 },
+	{ CCI_REG8(0x3205), 0x7f },
+	{ CCI_REG8(0x3206), 0x0c },
+	{ CCI_REG8(0x3207), 0x3f },
+	{ CCI_REG8(0x3208), 0x08 },
+	{ CCI_REG8(0x3209), 0x38 },
+	{ CCI_REG8(0x320a), 0x06 },
+	{ CCI_REG8(0x320b), 0x18 },
+	{ CCI_REG8(0x3210), 0x00 },
+	{ CCI_REG8(0x3211), 0x04 },
+	{ CCI_REG8(0x3212), 0x00 },
+	{ CCI_REG8(0x3213), 0x04 },
+	{ CCI_REG8(0x3215), 0x31 },
+	{ CCI_REG8(0x3220), 0x01 },
+	/*
+	 * 0x3221: bit5 = vertical flip, bit2 = horizontal mirror (measured by
+	 * sweeping the register on the sibling SC820CS: 0x60 and 0x06 each
+	 * carry exactly one real bit, bits 6 and 1 are duplicates of them).
+	 * Keep the vertical flip so the scene is upright. For the horizontal
+	 * mirror use Android's 0x66 (mirror ON): once the sensor is declared
+	 * rear (location=back) GNOME Snapshot / aperture applies its OWN
+	 * horizontal mirror to BOTH the preview and the saved picture, so the
+	 * sensor mirror has to be ON to cancel it and land un-mirrored on
+	 * screen and on disk. (0x60 / mirror OFF leaves both mirrored.)
+	 *
+	 * Both flips together move the readout phase by one pixel in each axis,
+	 * which swaps the two Bayer phases: a part whose own phase is X reads
+	 * out as the opposite phase.  This driver declares SBGGR (see
+	 * sc1320cs_get_fmt), settled on-device on 2026-10-27 by looking at the
+	 * captured colours rather than by reasoning about the flips; the vendor
+	 * tree carries no CFA statement at all, so nothing in the register
+	 * values can arbitrate it.
+	 */
+	{ CCI_REG8(0x3221), 0x66 },
+	{ CCI_REG8(0x5000), 0x5e },
+	{ CCI_REG8(0x5900), 0x01 },
+	{ CCI_REG8(0x5901), 0x04 },
+	{ CCI_REG8(0x301f), 0x00 },
+	{ CCI_REG8(0x326d), 0x00 },
+	{ CCI_REG8(0x320e), 0x0c },
+	{ CCI_REG8(0x320f), 0x80 },
+	{ CCI_REG8(0x3e20), 0x00 },
+	{ CCI_REG8(0x3e00), 0x03 },
+	{ CCI_REG8(0x3e01), 0x1f },
+	{ CCI_REG8(0x3e02), 0xe0 },
+	{ CCI_REG8(0x3e09), 0x0f },
+	{ CCI_REG8(0x3e07), 0x80 },
+	{ CCI_REG8(0x301f), 0x00 },
+	{ CCI_REG8(0x3337), 0x00 },
+	{ CCI_REG8(0x391f), 0x41 },
+};
+
+static const struct cci_reg_sequence *
+sc1320cs_mode_regs(u32 width, u32 height, size_t *len);
+
 static int sc1320cs_s_stream(struct v4l2_subdev *sd, int enable)
 {
 	struct sc1320cs *sensor = to_sc1320cs(sd);
@@ -455,8 +685,16 @@ static int sc1320cs_s_stream(struct v4l2_subdev *sd, int enable)
 	/* Android leaves ~10ms between the soft reset and the mode table */
 	usleep_range(10000, 11000);
 
-	ret = cci_multi_reg_write(sensor->regmap, sc1320cs_mode_4160x3120,
-				  ARRAY_SIZE(sc1320cs_mode_4160x3120), NULL);
+	{
+		const struct cci_reg_sequence *regs;
+		size_t nregs;
+
+		regs = sc1320cs_mode_regs(0, 0, &nregs); /* 0,0 = 全幅默认 */
+		/* 实际尺寸经 sensor->mode_w/h 由 set_fmt 记录 */
+		if (sensor->mode_w == 2104 && sensor->mode_h == 1560)
+			regs = sc1320cs_mode_regs(2104, 1560, &nregs);
+		ret = cci_multi_reg_write(sensor->regmap, regs, nregs, NULL);
+	}
 	if (ret) {
 		dev_err(sensor->dev, "failed to write mode table: %d\n", ret);
 		goto err_put;
@@ -490,6 +728,42 @@ static int sc1320cs_get_fmt(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static const struct cci_reg_sequence *
+sc1320cs_mode_regs(u32 width, u32 height, size_t *len)
+{
+	if (expose_2104 && width == 2104 && height == 1560) {
+		*len = ARRAY_SIZE(sc1320cs_mode_2104x1560);
+		return sc1320cs_mode_2104x1560;
+	}
+	*len = ARRAY_SIZE(sc1320cs_mode_4160x3120);
+	return sc1320cs_mode_4160x3120;
+}
+
+static int sc1320cs_set_fmt(struct v4l2_subdev *sd,
+			    struct v4l2_subdev_state *state,
+			    struct v4l2_subdev_format *fmt)
+{
+	struct sc1320cs *sensor = to_sc1320cs(sd);
+
+	if (expose_2104 && fmt->format.width <= 2104 &&
+	    fmt->format.height <= 1560) {
+		sensor->mode_w = 2104;
+		sensor->mode_h = 1560;
+	} else {
+		/* anything else snaps to the proven full-res readout */
+		sensor->mode_w = SC1320CS_NATIVE_WIDTH;
+		sensor->mode_h = SC1320CS_NATIVE_HEIGHT;
+	}
+
+	fmt->format.width = sensor->mode_w;
+	fmt->format.height = sensor->mode_h;
+	fmt->format.code = MEDIA_BUS_FMT_SBGGR10_1X10;
+	fmt->format.field = V4L2_FIELD_NONE;
+	fmt->format.colorspace = V4L2_COLORSPACE_RAW;
+
+	return 0;
+}
+
 static int sc1320cs_enum_mbus_code(struct v4l2_subdev *sd,
 				   struct v4l2_subdev_state *state,
 				   struct v4l2_subdev_mbus_code_enum *code)
@@ -506,15 +780,27 @@ static int sc1320cs_enum_frame_size(struct v4l2_subdev *sd,
 				    struct v4l2_subdev_state *state,
 				    struct v4l2_subdev_frame_size_enum *fse)
 {
-	if (fse->index > 0 || fse->code != MEDIA_BUS_FMT_SBGGR10_1X10)
+	if (fse->code != MEDIA_BUS_FMT_SBGGR10_1X10)
 		return -EINVAL;
 
-	fse->min_width = SC1320CS_NATIVE_WIDTH;
-	fse->max_width = SC1320CS_NATIVE_WIDTH;
-	fse->min_height = SC1320CS_NATIVE_HEIGHT;
-	fse->max_height = SC1320CS_NATIVE_HEIGHT;
+	switch (fse->index) {
+	case 0:
+		fse->min_width = SC1320CS_NATIVE_WIDTH;
+		fse->max_width = SC1320CS_NATIVE_WIDTH;
+		fse->min_height = SC1320CS_NATIVE_HEIGHT;
+		fse->max_height = SC1320CS_NATIVE_HEIGHT;
+		return 0;
+	case 1:
+		if (!expose_2104)
+			return -EINVAL;
+		fse->min_width = 2104;
+		fse->max_width = 2104;
+		fse->min_height = 1560;
+		fse->max_height = 1560;
+		return 0;
+	}
 
-	return 0;
+	return -EINVAL;
 }
 
 /*
@@ -597,7 +883,7 @@ static const struct v4l2_subdev_pad_ops sc1320cs_pad_ops = {
 	.enum_mbus_code = sc1320cs_enum_mbus_code,
 	.enum_frame_size = sc1320cs_enum_frame_size,
 	.get_fmt = sc1320cs_get_fmt,
-	.set_fmt = sc1320cs_get_fmt,
+	.set_fmt = sc1320cs_set_fmt,
 	.get_selection = sc1320cs_get_selection,
 	.set_selection = sc1320cs_set_selection,
 };
