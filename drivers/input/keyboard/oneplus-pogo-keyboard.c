@@ -255,6 +255,7 @@ struct pogo_kb {
 	unsigned int rx_len;
 	unsigned int rx_sync;
 	unsigned long last_rx;
+	unsigned long mon_dbg_at;
 	u8 brand;
 	u8 bt_addr[6];
 	struct input_dev *kbd;
@@ -554,6 +555,7 @@ static void pogo_kb_rx_frame(struct pogo_kb *kb, const u8 *frame, unsigned int l
 		return;
 
 	WRITE_ONCE(kb->last_rx, jiffies);
+	dev_dbg_ratelimited(kb->dev, "rx frame cmd=%#x (last_rx fresh)\n", cmd);
 
 	if (kb->reply_cmd && cmd == kb->reply_cmd && data_len &&
 	    data[0] == kb->reply_sub) {
@@ -972,6 +974,15 @@ static void pogo_kb_monitor(struct pogo_kb *kb)
 {
 	unsigned long now = jiffies;
 
+#define MON_DBG_PERIOD (msecs_to_jiffies(1000))
+	if (time_after(now, kb->mon_dbg_at + MON_DBG_PERIOD)) {
+		kb->mon_dbg_at = now;
+		dev_dbg(kb->dev, "monitor state=%d rx_age=%ums grace_age=%ums\n",
+			kb->state,
+			jiffies_to_msecs(now - READ_ONCE(kb->last_rx)),
+			jiffies_to_msecs(now - kb->grace_start));
+	}
+
 	if (time_before(now, READ_ONCE(kb->last_rx) + msecs_to_jiffies(POGO_KB_SILENCE_MS)) ||
 	    time_before(now, kb->grace_start + msecs_to_jiffies(POGO_KB_GRACE_MS))) {
 		pogo_kb_schedule(kb, POGO_KB_MONITOR_PERIOD_MS);
@@ -1258,7 +1269,9 @@ static int pogo_kb_resume(struct device *dev)
 			dev_warn(dev, "keyboard did not confirm wake-up: %d\n", ret);
 
 		kb->grace_start = jiffies;
-		WRITE_ONCE(kb->last_rx, kb->grace_start);
+		/* NOT faking last_rx here: a live keyboard refreshes it with the
+		 * set_awake reply; a detached one must hit "went silent" fast.
+		 * (2026-11-03: the fake write masked detach across suspends.) */
 	}
 
 	if (kb->state != POGO_KB_IDLE)
