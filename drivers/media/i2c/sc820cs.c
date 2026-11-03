@@ -225,7 +225,7 @@ static const s64 sc820cs_link_freq_menu[] = {
  * rendered warm skin blue -- the R/B-swap signature, so the flipped
  * truth is BGGR and the base is its 180-degree partner RGGB.  The
  * earlier yellow-object reversal to BGGR was the timeline-confounded
- * call, LESSONS #55; the original warm-light statistics had it right).
+ * call; the original warm-light statistics had it right).
  * A readout rotation moves the CFA start, so the four flip combinations
  * map as RGGB -> GRBG (h) -> GBRG (v) -> BGGR (both).
  * Order: no flip, hflip, vflip, h+v flip. */
@@ -553,9 +553,7 @@ static int sc820cs_enable_streams(struct v4l2_subdev *sd,
 	struct i2c_client *client = v4l2_get_subdevdata(&sc820cs->sd);
 	int ret;
 
-	pr_info("sc820cs: enable_streams pad=%u mask=%llx\n", pad, streams_mask);
 	ret = pm_runtime_resume_and_get(&client->dev);
-	pr_info("sc820cs: resume ret=%d\n", ret);
 	if (ret < 0)
 		return ret;
 

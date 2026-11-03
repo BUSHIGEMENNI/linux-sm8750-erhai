@@ -442,7 +442,7 @@ static const struct cci_reg_sequence sc1320cs_mode_4160x3120[] = {
  * request, so merely advertising it changes every preview stream.  The
  * table is the proven mode-0 table with only the nine binned-mode value
  * changes from the vendor blob; the mode-0 tail block is kept verbatim
- * (single-variable rule, LESSONS #98/#99).
+ * (change one variable group at a time).
  */
 static bool expose_2104;
 module_param(expose_2104, bool, 0644);
@@ -938,7 +938,7 @@ static const struct v4l2_subdev_ops sc1320cs_subdev_ops = {
  * exposure lines into seconds; with the timing figure it would be off by
  * 2x.  libcamera's soft IPA does not currently drive this sensor's
  * exposure, so nothing is derived from it yet -- mark it verified before
- * any AE work starts (see LESSONS #52 on measuring rather than inferring).
+ * any AE work starts (measured, not inferred).
  */
 
 /*

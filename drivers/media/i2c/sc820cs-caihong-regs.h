@@ -38,7 +38,7 @@ static const struct cci_reg_sequence sc820cs_caihong_3264x2448_regs[] = {
 	 * pixel clock 105.6 MHz (10.86 fps measured).  Halving both PLL
 	 * dividers doubles the system AND MIPI clocks together, keeping the
 	 * serialization ratio intact: 211.2 MHz pixel, ~528 Mbps/lane.
-	 * See LESSONS #93/#96. */
+	 */
 	{ CCI_REG8(0x36e9), 0x22 },
 	{ CCI_REG8(0x37f9), 0x22 },
 	{ CCI_REG8(0x301f), 0x0e },
